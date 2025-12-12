@@ -49,22 +49,18 @@ export const getTrainingFolder = async () => {
 };
 
 export const getHFToken = async () => {
-  const key = 'HF_TOKEN';
-  let token = myCache.get(key) as string;
-  if (token) {
-    return token;
-  }
-  let row = await prisma.settings.findFirst({
+  // NOTE: Do NOT cache this value.
+  // Next.js can bundle route handlers separately during dev/prod, which means our
+  // in-memory NodeCache isn't guaranteed to be shared across routes. If we cache
+  // an empty/old token, parquet import may run without auth and Hugging Face can
+  // respond with 404/401 even though the token was updated in Settings.
+  const row = await prisma.settings.findFirst({
     where: {
-      key: key,
+      key: 'HF_TOKEN',
     },
   });
-  token = '';
-  if (row?.value && row.value !== '') {
-    token = row.value;
-  }
-  myCache.set(key, token);
-  return token;
+
+  return (row?.value || '').trim();
 };
 
 export const getDataRoot = async () => {

@@ -6,6 +6,7 @@ import { FaChevronLeft } from 'react-icons/fa';
 import DatasetImageCard from '@/components/DatasetImageCard';
 import { Button } from '@headlessui/react';
 import AddImagesModal, { openImagesModal } from '@/components/AddImagesModal';
+import ImportParquetModal, { openImportParquetModal } from '@/components/ImportParquetModal';
 import { TopBar, MainContent } from '@/components/layout';
 import { apiClient } from '@/utils/api';
 import FullscreenDropOverlay from '@/components/FullscreenDropOverlay';
@@ -15,6 +16,10 @@ export default function DatasetPage({ params }: { params: { datasetName: string 
   const usableParams = use(params as any) as { datasetName: string };
   const datasetName = usableParams.datasetName;
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+
+  const [hfParquetPath, setHfParquetPath] = useState('');
+  const [isImporting, setIsImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
 
   const refreshImageList = (dbName: string) => {
     setStatus('loading');
@@ -103,17 +108,66 @@ export default function DatasetPage({ params }: { params: { datasetName: string 
           <h1 className="text-lg">Dataset: {datasetName}</h1>
         </div>
         <div className="flex-1"></div>
-        <div>
+        <div className="flex items-center gap-2">
           <Button
             className="text-gray-200 bg-slate-600 px-3 py-1 rounded-md"
             onClick={() => openImagesModal(datasetName, () => refreshImageList(datasetName))}
           >
             Add Images
           </Button>
+          <Button
+            className="text-gray-200 bg-slate-600 px-3 py-1 rounded-md"
+            onClick={() => openImportParquetModal(datasetName, () => refreshImageList(datasetName))}
+          >
+            Import from HF Parquet
+          </Button>
         </div>
       </TopBar>
       <MainContent>
         {PageInfoContent}
+
+        {/* Empty dataset: show parquet import inline (in addition to drag/drop) */}
+        {status === 'success' && imgList.length === 0 && (
+          <div className="mt-6 mx-auto max-w-md rounded-xl border border-gray-700 bg-gray-800/50 p-4">
+            <div className="text-sm font-semibold text-gray-200 mb-2">Import from Hugging Face Parquet</div>
+            <input
+              type="text"
+              value={hfParquetPath}
+              onChange={e => setHfParquetPath(e.target.value)}
+              placeholder="org/repo/path/to/file.parquet"
+              className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg focus:ring-2 focus:ring-gray-600 focus:border-transparent"
+              disabled={isImporting}
+            />
+            <div className="mt-2 text-xs text-gray-400">Uses HF_TOKEN from Settings to access private repos.</div>
+
+            {importError && <div className="mt-2 text-sm text-red-400">{importError}</div>}
+
+            <button
+              className={`mt-3 w-full px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors ${
+                isImporting || hfParquetPath.trim().length === 0 ? 'opacity-50 cursor-not-allowed' : ''
+              }`}
+              disabled={isImporting || hfParquetPath.trim().length === 0}
+              onClick={async () => {
+                setIsImporting(true);
+                setImportError(null);
+                try {
+                  await apiClient.post('/api/datasets/importParquet', {
+                    datasetName,
+                    hfParquetPath: hfParquetPath.trim(),
+                  });
+                  await refreshImageList(datasetName);
+                } catch (e: any) {
+                  setImportError(e?.response?.data?.error || e?.message || 'Import failed');
+                } finally {
+                  setIsImporting(false);
+                }
+              }}
+            >
+              {isImporting ? 'Importing…' : 'Import from HF Parquet'}
+            </button>
+          </div>
+        )}
+
         {status === 'success' && imgList.length > 0 && (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
             {imgList.map(img => (
@@ -128,10 +182,8 @@ export default function DatasetPage({ params }: { params: { datasetName: string 
         )}
       </MainContent>
       <AddImagesModal />
-      <FullscreenDropOverlay
-        datasetName={datasetName}
-        onComplete={() => refreshImageList(datasetName)}
-      />
+      <ImportParquetModal />
+      <FullscreenDropOverlay datasetName={datasetName} onComplete={() => refreshImageList(datasetName)} />
     </>
   );
 }
