@@ -492,6 +492,7 @@ export default function SimpleJob({
                   options={[
                     { value: 'adamw8bit', label: 'AdamW8Bit' },
                     { value: 'adafactor', label: 'Adafactor' },
+                    { value: 'prodigy_plus_schedulefree', label: 'Prodigy Plus Schedule Free' },
                   ]}
                 />
                 <NumberInput
