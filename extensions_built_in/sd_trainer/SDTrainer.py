@@ -1978,10 +1978,17 @@ class SDTrainer(BaseSDTrainProcess):
                             prior_pred=prior_to_calculate_loss,
                         )
                     
+                    # check if nan
+                    if torch.isnan(loss):
+                        print_acc("loss is nan")
+                        loss = torch.zeros_like(loss).requires_grad_(True)
+
+                    # apply loss multiplier
+                    loss = loss * loss_multiplier.mean()
+
                     if self.train_config.diff_output_preservation or self.train_config.blank_prompt_preservation:
                         # send the loss backwards otherwise checkpointing will fail
                         self.accelerator.backward(loss)
-                        normal_loss = loss.detach() # dont send backward again
                         
                         with torch.no_grad():
                             if self.train_config.diff_output_preservation:
@@ -2005,29 +2012,19 @@ class SDTrainer(BaseSDTrainProcess):
                         preservation_loss = torch.nn.functional.mse_loss(preservation_pred, prior_pred) * multiplier
                         self.accelerator.backward(preservation_loss)
 
-                        loss = normal_loss + preservation_loss
-                        loss = loss.clone().detach()
-                        # require grad again so the backward wont fail
-                        loss.requires_grad_(True)
-                        
-                # check if nan
-                if torch.isnan(loss):
-                    print_acc("loss is nan")
-                    loss = torch.zeros_like(loss).requires_grad_(True)
-
-                with self.timer('backward'):
-                    # todo we have multiplier seperated. works for now as res are not in same batch, but need to change
-                    loss = loss * loss_multiplier.mean()
-                    # IMPORTANT if gradient checkpointing do not leave with network when doing backward
-                    # it will destroy the gradients. This is because the network is a context manager
-                    # and will change the multipliers back to 0.0 when exiting. They will be
-                    # 0.0 for the backward pass and the gradients will be 0.0
-                    # I spent weeks on fighting this. DON'T DO IT
-                    # with fsdp_overlap_step_with_backward():
-                    # if self.is_bfloat:
-                    # loss.backward()
-                    # else:
-                    self.accelerator.backward(loss)
+                        loss = loss.detach() + preservation_loss.detach()
+                    else:
+                        with self.timer('backward'):
+                            # IMPORTANT if gradient checkpointing do not leave with network when doing backward
+                            # it will destroy the gradients. This is because the network is a context manager
+                            # and will change the multipliers back to 0.0 when exiting. They will be
+                            # 0.0 for the backward pass and the gradients will be 0.0
+                            # I spent weeks on fighting this. DON'T DO IT
+                            # with fsdp_overlap_step_with_backward():
+                            # if self.is_bfloat:
+                            # loss.backward()
+                            # else:
+                            self.accelerator.backward(loss)
 
         return loss.detach()
         # flush()
