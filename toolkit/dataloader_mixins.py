@@ -577,13 +577,16 @@ class ImageProcessingDTOMixin:
                     img = img.transpose(Image.FLIP_TOP_BOTTOM)
                 
                 # Apply bucketing
-                img = img.resize((self.scale_to_width, self.scale_to_height), Image.BICUBIC)
-                img = img.crop((
-                    self.crop_x,
-                    self.crop_y,
-                    self.crop_x + self.crop_width,
-                    self.crop_y + self.crop_height
-                ))
+                if self.scale_to_width != img.width or self.scale_to_height != img.height:
+                    img = img.resize((self.scale_to_width, self.scale_to_height), Image.BICUBIC)
+                
+                if self.crop_width != img.width or self.crop_height != img.height:
+                    img = img.crop((
+                        self.crop_x,
+                        self.crop_y,
+                        self.crop_x + self.crop_width,
+                        self.crop_y + self.crop_height
+                    ))
                 
                 # Apply transform if provided
                 if transform:
@@ -701,17 +704,21 @@ class ImageProcessingDTOMixin:
 
         if self.dataset_config.buckets:
             # scale and crop based on file item
-            img = img.resize((self.scale_to_width, self.scale_to_height), Image.BICUBIC)
+            if self.scale_to_width != w or self.scale_to_height != h:
+                img = img.resize((self.scale_to_width, self.scale_to_height), Image.BICUBIC)
+
             # crop to x_crop, y_crop, x_crop + crop_width, y_crop + crop_height
             if img.width < self.crop_x + self.crop_width or img.height < self.crop_y + self.crop_height:
                 # todo look into this. This still happens sometimes
                 print_acc('size mismatch')
-            img = img.crop((
-                self.crop_x,
-                self.crop_y,
-                self.crop_x + self.crop_width,
-                self.crop_y + self.crop_height
-            ))
+            
+            if self.crop_width != img.width or self.crop_height != img.height:
+                img = img.crop((
+                    self.crop_x,
+                    self.crop_y,
+                    self.crop_x + self.crop_width,
+                    self.crop_y + self.crop_height
+                ))
 
             # img = transforms.CenterCrop((self.crop_height, self.crop_width))(img)
         else:
@@ -815,15 +822,17 @@ class InpaintControlFileItemDTOMixin:
 
             if self.dataset_config.buckets:
                 # scale and crop based on file item
-                img = img.resize((self.scale_to_width, self.scale_to_height), Image.BICUBIC)
+                if self.scale_to_width != w or self.scale_to_height != h:
+                    img = img.resize((self.scale_to_width, self.scale_to_height), Image.BICUBIC)
                 # img = transforms.CenterCrop((self.crop_height, self.crop_width))(img)
                 # crop
-                img = img.crop((
-                    self.crop_x,
-                    self.crop_y,
-                    self.crop_x + self.crop_width,
-                    self.crop_y + self.crop_height
-                ))
+                if self.crop_width != img.width or self.crop_height != img.height:
+                    img = img.crop((
+                        self.crop_x,
+                        self.crop_y,
+                        self.crop_x + self.crop_width,
+                        self.crop_y + self.crop_height
+                    ))
             else:
                 raise Exception("Inpaint images not supported for non-bucket datasets")
             
@@ -924,15 +933,17 @@ class ControlFileItemDTOMixin:
 
                 if self.dataset_config.buckets:
                     # scale and crop based on file item
-                    img = img.resize((self.scale_to_width, self.scale_to_height), Image.BICUBIC)
+                    if self.scale_to_width != w or self.scale_to_height != h:
+                        img = img.resize((self.scale_to_width, self.scale_to_height), Image.BICUBIC)
                     # img = transforms.CenterCrop((self.crop_height, self.crop_width))(img)
                     # crop
-                    img = img.crop((
-                        self.crop_x,
-                        self.crop_y,
-                        self.crop_x + self.crop_width,
-                        self.crop_y + self.crop_height
-                    ))
+                    if self.crop_width != img.width or self.crop_height != img.height:
+                        img = img.crop((
+                            self.crop_x,
+                            self.crop_y,
+                            self.crop_x + self.crop_width,
+                            self.crop_y + self.crop_height
+                        ))
                 else:
                     raise Exception("Control images not supported for non-bucket datasets")
             transform = transforms.Compose([
@@ -1372,15 +1383,17 @@ class MaskFileItemDTOMixin:
 
         if self.dataset_config.buckets:
             # scale and crop based on file item
-            img = img.resize((self.scale_to_width, self.scale_to_height), Image.BICUBIC)
+            if self.scale_to_width != w or self.scale_to_height != h:
+                img = img.resize((self.scale_to_width, self.scale_to_height), Image.BICUBIC)
             # img = transforms.CenterCrop((self.crop_height, self.crop_width))(img)
             # crop
-            img = img.crop((
-                self.crop_x,
-                self.crop_y,
-                self.crop_x + self.crop_width,
-                self.crop_y + self.crop_height
-            ))
+            if self.crop_width != img.width or self.crop_height != img.height:
+                img = img.crop((
+                    self.crop_x,
+                    self.crop_y,
+                    self.crop_x + self.crop_width,
+                    self.crop_y + self.crop_height
+                ))
         else:
             raise Exception("Mask images not supported for non-bucket datasets")
 
@@ -1447,15 +1460,17 @@ class UnconditionalFileItemDTOMixin:
 
         if self.dataset_config.buckets:
             # scale and crop based on file item
-            img = img.resize((self.scale_to_width, self.scale_to_height), Image.BICUBIC)
+            if self.scale_to_width != w or self.scale_to_height != h:
+                img = img.resize((self.scale_to_width, self.scale_to_height), Image.BICUBIC)
             # img = transforms.CenterCrop((self.crop_height, self.crop_width))(img)
             # crop
-            img = img.crop((
-                self.crop_x,
-                self.crop_y,
-                self.crop_x + self.crop_width,
-                self.crop_y + self.crop_height
-            ))
+            if self.crop_width != img.width or self.crop_height != img.height:
+                img = img.crop((
+                    self.crop_x,
+                    self.crop_y,
+                    self.crop_x + self.crop_width,
+                    self.crop_y + self.crop_height
+                ))
         else:
             raise Exception("Unconditional images are not supported for non-bucket datasets")
 

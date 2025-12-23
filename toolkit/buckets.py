@@ -97,6 +97,8 @@ def get_bucket_for_image_size(
         real_resolution = get_resolution(width, height)
         resolution = min(resolution, real_resolution)
         bucket_size_list = get_bucket_sizes(resolution=resolution, divisibility=divisibility)
+        if resolution == real_resolution and width % divisibility == 0 and height % divisibility == 0:
+            bucket_size_list.append({"width": width, "height": height})
 
     # Check for exact match first
     for bucket in bucket_size_list:
