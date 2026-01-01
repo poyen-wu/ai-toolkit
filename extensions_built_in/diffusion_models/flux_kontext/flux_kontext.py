@@ -6,6 +6,7 @@ import torchvision
 import yaml
 from toolkit import train_tools
 from toolkit.config_modules import GenerateImageConfig, ModelConfig
+from toolkit.memory_management.manager import MemoryManager
 from PIL import Image
 from toolkit.models.base_model import BaseModel
 from diffusers import FluxTransformer2DModel, AutoencoderKL, FluxKontextPipeline
@@ -97,7 +98,14 @@ class FluxKontextModel(BaseModel):
             subfolder=transformer_subfolder,
             torch_dtype=dtype
         )
-        transformer.to(self.quantize_device, dtype=dtype)
+
+        offload_transformer = (
+            self.model_config.layer_offloading
+            and self.model_config.layer_offloading_transformer_percent > 0
+        )
+
+        if not offload_transformer:
+            transformer.to(self.quantize_device, dtype=dtype)
 
         if self.model_config.quantize:
             # patch the state dict method
@@ -107,11 +115,20 @@ class FluxKontextModel(BaseModel):
             quantize(transformer, weights=quantization_type,
                      **self.model_config.quantize_kwargs)
             freeze(transformer)
-            transformer.to(self.device_torch)
+            if not offload_transformer:
+                transformer.to(self.device_torch)
         else:
-            transformer.to(self.device_torch, dtype=dtype)
+            if not offload_transformer:
+                transformer.to(self.device_torch, dtype=dtype)
 
         flush()
+
+        if offload_transformer:
+            MemoryManager.attach(
+                transformer,
+                self.device_torch,
+                offload_percent=self.model_config.layer_offloading_transformer_percent,
+            )
 
         self.print_and_status_update("Loading T5")
         tokenizer_2 = T5TokenizerFast.from_pretrained(
@@ -120,7 +137,14 @@ class FluxKontextModel(BaseModel):
         text_encoder_2 = T5EncoderModel.from_pretrained(
             base_model_path, subfolder="text_encoder_2", torch_dtype=dtype
         )
-        text_encoder_2.to(self.device_torch, dtype=dtype)
+
+        offload_te = (
+            self.model_config.layer_offloading
+            and self.model_config.layer_offloading_text_encoder_percent > 0
+        )
+
+        if not offload_te:
+            text_encoder_2.to(self.device_torch, dtype=dtype)
         flush()
 
         if self.model_config.quantize_te:
@@ -129,6 +153,13 @@ class FluxKontextModel(BaseModel):
                 self.model_config.qtype))
             freeze(text_encoder_2)
             flush()
+
+        if offload_te:
+            MemoryManager.attach(
+                text_encoder_2,
+                self.device_torch,
+                offload_percent=self.model_config.layer_offloading_text_encoder_percent,
+            )
 
         self.print_and_status_update("Loading CLIP")
         text_encoder = CLIPTextModel.from_pretrained(
