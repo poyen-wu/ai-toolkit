@@ -23,7 +23,7 @@ class EmptyLogger:
         pass
 
     # send the log
-    def commit(self, step: Optional[int] = None):
+    def commit(self, step: Optional[int] = None, image_paths: Optional[List[str]] = None):
         pass
 
     # log image
@@ -62,7 +62,7 @@ class WandbLogger(EmptyLogger):
         # but we don't want that to happen, so we set commit=False
         self._log(*args, **kwargs, commit=False)
 
-    def commit(self, step: Optional[int] = None):
+    def commit(self, step: Optional[int] = None, image_paths: Optional[List[str]] = None):
         # after overall one step is done, we commit the log
         # by log empty object with commit=True
         self._log({}, step=step, commit=True)
@@ -99,7 +99,7 @@ class UILogger:
         self._step_counter = 0
 
         # buffered writes
-        self._pending_steps: List[Tuple[int, float]] = []
+        self._pending_steps: List[Tuple[int, float, Optional[str]]] = []
         self._pending_metrics: List[
             Tuple[int, str, Optional[float], Optional[str]]
         ] = []
@@ -126,6 +126,7 @@ class UILogger:
         self._con.execute("PRAGMA busy_timeout=30000;")
 
         self._init_schema(self._con)
+        self._migrate_schema(self._con)
 
         self._started = True
         self._last_flush = time.time()
@@ -138,7 +139,7 @@ class UILogger:
         self._log_to_commit.update(log_dict)
 
     # send the log
-    def commit(self, step: Optional[int] = None):
+    def commit(self, step: Optional[int] = None, image_paths: Optional[List[str]] = None):
         if not self._started:
             self.start()
 
@@ -154,9 +155,19 @@ class UILogger:
                 self._step_counter = step + 1
 
         wall_time = time.time()
+        
+        # process image paths
+        image_path_str = None
+        if image_paths is not None:
+            # simple string representation or json
+            # just basename to save space? user might want full path.
+            # let's store basename to keep it clean, or full path if needed.
+            # user said "which data (training image) is used".
+            # let's store comma separated
+            image_path_str = ",".join(image_paths)
 
         # buffer step row (upsert later)
-        self._pending_steps.append((step, wall_time))
+        self._pending_steps.append((step, wall_time, image_path_str))
 
         # buffer metrics rows + key min/max updates
         for k, v in self._log_to_commit.items():
@@ -206,13 +217,22 @@ class UILogger:
     # internal
     # -------------------------
 
+    def _migrate_schema(self, con: sqlite3.Connection) -> None:
+        try:
+            con.execute("ALTER TABLE steps ADD COLUMN image_path TEXT")
+        except sqlite3.OperationalError:
+            pass
+        except Exception as e:
+            print(f"Error migrating schema: {e}")
+
     def _init_schema(self, con: sqlite3.Connection) -> None:
         con.execute("BEGIN;")
 
         con.execute("""
             CREATE TABLE IF NOT EXISTS steps (
                 step      INTEGER PRIMARY KEY,
-                wall_time REAL NOT NULL
+                wall_time REAL NOT NULL,
+                image_path TEXT
             );
         """)
 
@@ -265,8 +285,8 @@ class UILogger:
         # steps upsert
         if self._pending_steps:
             con.executemany(
-                "INSERT INTO steps(step, wall_time) VALUES(?, ?) "
-                "ON CONFLICT(step) DO UPDATE SET wall_time=excluded.wall_time;",
+                "INSERT INTO steps(step, wall_time, image_path) VALUES(?, ?, ?) "
+                "ON CONFLICT(step) DO UPDATE SET wall_time=excluded.wall_time, image_path=excluded.image_path;",
                 self._pending_steps,
             )
 

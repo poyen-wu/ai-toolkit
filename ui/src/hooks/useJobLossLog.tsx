@@ -7,6 +7,7 @@ export interface LossPoint {
   step: number;
   wall_time?: number;
   value: number | null;
+  image_path?: string | null;
 }
 
 type SeriesMap = Record<string, LossPoint[]>;

@@ -59,17 +59,24 @@ export async function GET(request: NextRequest, { params }: { params: { jobID: s
     const keysRows = await all<{ key: string }>(db, `SELECT key FROM metric_keys ORDER BY key ASC`);
     const keys = keysRows.map((r) => r.key);
 
+    // Check if image_path column exists
+    const stepColumns = await all(db, "PRAGMA table_info(steps)");
+    const hasImagePath = stepColumns.some((c: any) => c.name === 'image_path');
+    const imagePathCol = hasImagePath ? 's.image_path' : 'NULL';
+
     const points = await all<{
       step: number;
       wall_time: number;
       value: number | null;
       value_text: string | null;
+      image_path: string | null;
     }>(
       db,
       `
       SELECT
         m.step AS step,
         s.wall_time AS wall_time,
+        ${imagePathCol} AS image_path,
         m.value_real AS value,
         m.value_text AS value_text
       FROM metrics m
@@ -90,6 +97,7 @@ export async function GET(request: NextRequest, { params }: { params: { jobID: s
         step: p.step,
         wall_time: p.wall_time,
         value: p.value ?? (p.value_text ? Number(p.value_text) : null),
+        image_path: p.image_path,
       })),
     });
   } finally {

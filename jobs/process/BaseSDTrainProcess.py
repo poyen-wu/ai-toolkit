@@ -2324,7 +2324,24 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 # commit log
                 if self.accelerator.is_main_process:
                     with self.timer('commit_logger'):
-                        self.logger.commit(step=self.step_num)
+                        # get image paths
+                        image_paths = []
+                        if batch_list:
+                            for batch_item in batch_list:
+                                if isinstance(batch_item, DataLoaderBatchDTO):
+                                    for file_item in batch_item.file_items:
+                                        # Main path
+                                        if file_item.path:
+                                            image_paths.append(f"Target: {file_item.path}")
+                                        
+                                        # Control path(s)
+                                        if hasattr(file_item, 'control_path') and file_item.control_path:
+                                            if isinstance(file_item.control_path, list):
+                                                for cp in file_item.control_path:
+                                                    image_paths.append(f"Control: {cp}")
+                                            elif isinstance(file_item.control_path, str):
+                                                image_paths.append(f"Control: {file_item.control_path}")
+                        self.logger.commit(step=self.step_num, image_paths=image_paths)
 
                 # sets progress bar to match out step
                 if self.progress_bar is not None:

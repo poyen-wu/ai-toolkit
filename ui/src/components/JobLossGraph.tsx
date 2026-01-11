@@ -112,7 +112,7 @@ export default function JobLossGraph({ job }: Props) {
     const t = clamp01(smoothing / 100);
     const alpha = 1.0 - t * 0.98; // 1.0 -> 0.02
 
-    const out: Record<string, { raw: { step: number; value: number }[]; smooth: { step: number; value: number }[] }> =
+    const out: Record<string, { raw: { step: number; value: number; image_path?: string | null }[]; smooth: { step: number; value: number }[] }> =
       {};
 
     for (const key of activeKeys) {
@@ -120,7 +120,7 @@ export default function JobLossGraph({ job }: Props) {
 
       let raw = pts
         .filter(p => p.value !== null && Number.isFinite(p.value as number))
-        .map(p => ({ step: p.step, value: p.value as number }))
+        .map(p => ({ step: p.step, value: p.value as number, image_path: p.image_path }))
         .filter(p => (useLogScale ? p.value > 0 : true))
         .filter((_, idx) => idx % stride === 0);
 
@@ -149,6 +149,7 @@ export default function JobLossGraph({ job }: Props) {
       for (const p of s.raw) {
         const row = map.get(p.step) ?? { step: p.step };
         row[`${key}__raw`] = p.value;
+        if (p.image_path) row['image_path'] = p.image_path;
         map.set(p.step, row);
       }
       for (const p of s.smooth) {
@@ -260,16 +261,50 @@ export default function JobLossGraph({ job }: Props) {
                 />
                 <Tooltip
                   cursor={{ stroke: 'rgba(59,130,246,0.25)', strokeWidth: 1 }}
-                  contentStyle={{
-                    background: 'rgba(17,24,39,0.96)',
-                    border: '1px solid rgba(31,41,55,1)',
-                    borderRadius: 10,
-                    color: 'rgba(255,255,255,0.9)',
-                    fontSize: 12,
+                  content={({ active, payload, label }: any) => {
+                    if (active && payload && payload.length) {
+                      const data = payload[0].payload;
+                      const imagePath = data.image_path;
+                      return (
+                        <div
+                          style={{
+                            background: 'rgba(17,24,39,0.96)',
+                            border: '1px solid rgba(31,41,55,1)',
+                            borderRadius: 10,
+                            padding: '8px 12px',
+                            color: 'rgba(255,255,255,0.9)',
+                            fontSize: 12,
+                          }}
+                        >
+                          <p style={{ color: 'rgba(255,255,255,0.75)', marginBottom: 4 }}>{`step ${label}`}</p>
+                          {payload.map((entry: any, index: number) => (
+                            <div key={index} style={{ color: entry.color, marginBottom: 2 }}>
+                              {`${entry.name}: ${formatNum(Number(entry.value))}`}
+                            </div>
+                          ))}
+                          {imagePath && (
+                            <div
+                              style={{
+                                marginTop: 6,
+                                borderTop: '1px solid rgba(255,255,255,0.1)',
+                                paddingTop: 4,
+                                color: 'rgba(255,255,255,0.6)',
+                                maxWidth: 300,
+                                wordBreak: 'break-all',
+                              }}
+                            >
+                              {imagePath.split(',').map((path: string, i: number) => (
+                                <div key={i} style={{ marginBottom: 2 }}>
+                                  {path.trim()}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+                    return null;
                   }}
-                  labelStyle={{ color: 'rgba(255,255,255,0.75)' }}
-                  labelFormatter={(label: any) => `step ${label}`}
-                  formatter={(value: any, name: any) => [formatNum(Number(value)), name]}
                 />
 
                 <Legend
