@@ -2448,9 +2448,10 @@ class BaseSDTrainProcess(BaseTrainProcess):
         samples_dir = os.path.join(self.save_root, "samples")
         if os.path.isdir(samples_dir):
             for filename in os.listdir(samples_dir):
-                #The filenames are structured as 1724085406830__00000500_0.jpg
+                #The filenames are structured as 1724085406830__00000500_0.png
                 #So here we capture the 2nd part (steps) and 3rd (index the matches the prompt)
-                match = re.search(r"__(\d+)_(\d+)\.jpg$", filename)
+                ext = self.sample_config.ext
+                match = re.search(r"__(\d+)_(\d+)\." + ext + "$", filename)
                 if match:
                     steps, index = int(match.group(1)), int(match.group(2))
                     #Here we only care about uploading the latest samples, the match with the # of steps
