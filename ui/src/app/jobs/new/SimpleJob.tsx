@@ -887,10 +887,11 @@ export default function SimpleJob({
                     </div>
                     <div>
                       <FormGroup label="Resolutions" className="pt-2">
-                        <div className="grid grid-cols-2 gap-2">
+                        <div className="grid grid-cols-3 gap-2">
                           {[
                             [256, 512, 768],
                             [1024, 1280, 1536],
+                            [2048, 3072, 4096],
                           ].map(resGroup => (
                             <div key={resGroup[0]} className="space-y-2">
                               {resGroup.map(res => (
