@@ -2,7 +2,7 @@
 
 import { Job } from '@prisma/client';
 import useJobLossLog, { LossPoint } from '@/hooks/useJobLossLog';
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, Legend } from 'recharts';
 
 interface Props {
@@ -76,8 +76,118 @@ function strokeForKey(key: string) {
   return PALETTE[hashToIndex(key, PALETTE.length)];
 }
 
+interface DualSliderProps {
+  min: number;
+  max: number;
+  value: [number, number];
+  onChange: (value: [number, number]) => void;
+  className?: string;
+  disabled?: boolean;
+}
+
+function DualSlider({ min, max, value, onChange, className, disabled }: DualSliderProps) {
+  const trackRef = useRef<HTMLDivElement>(null);
+  const [dragging, setDragging] = useState<'min' | 'max' | null>(null);
+
+  const getPercent = useCallback(
+    (v: number) => {
+      if (max === min) return 0;
+      return Math.max(0, Math.min(100, ((v - min) / (max - min)) * 100));
+    },
+    [min, max],
+  );
+
+  const handlePointerDown = (e: React.PointerEvent, thumb: 'min' | 'max') => {
+    if (disabled) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setDragging(thumb);
+    try {
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {}
+  };
+
+  const handlePointerMove = useCallback(
+    (e: React.PointerEvent) => {
+      if (!dragging || disabled || !trackRef.current) return;
+      const rect = trackRef.current.getBoundingClientRect();
+      const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const val = Math.round(min + ratio * (max - min));
+
+      const [currMin, currMax] = value;
+      if (dragging === 'min') {
+        const newMin = Math.min(val, currMax - 1); // Ensure min < max
+        const clampedMin = Math.max(min, newMin);
+        onChange([clampedMin, currMax]);
+      } else {
+        const newMax = Math.max(val, currMin + 1); // Ensure max > min
+        const clampedMax = Math.min(max, newMax);
+        onChange([currMin, clampedMax]);
+      }
+    },
+    [dragging, disabled, min, max, value, onChange],
+  );
+
+  const handlePointerUp = (e: React.PointerEvent) => {
+    setDragging(null);
+    try {
+      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {}
+  };
+
+  const minPercent = getPercent(value[0]);
+  const maxPercent = getPercent(value[1]);
+
+  return (
+    <div className={className}>
+      <div
+        ref={trackRef}
+        className={`relative w-full h-6 select-none touch-none ${disabled ? 'opacity-50 pointer-events-none' : ''}`}
+        onPointerMove={handlePointerMove}
+      >
+        {/* Track */}
+        <div className="absolute left-0 right-0 top-1/2 -translate-y-1/2 h-2 bg-gray-700 rounded-full" />
+
+        {/* Fill */}
+        <div
+          className="absolute top-1/2 -translate-y-1/2 h-2 bg-blue-500 rounded-full"
+          style={{ left: `${minPercent}%`, width: `${maxPercent - minPercent}%` }}
+        />
+
+        {/* Thumb Min */}
+        <div
+          className="absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-white rounded-full shadow cursor-pointer border border-gray-300 hover:scale-110 transition-transform -ml-2"
+          style={{ left: `${minPercent}%`, zIndex: dragging === 'min' ? 20 : 10 }}
+          onPointerDown={e => handlePointerDown(e, 'min')}
+          onPointerUp={handlePointerUp}
+        />
+
+        {/* Thumb Max */}
+        <div
+          className="absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-white rounded-full shadow cursor-pointer border border-gray-300 hover:scale-110 transition-transform -ml-2"
+          style={{ left: `${maxPercent}%`, zIndex: dragging === 'max' ? 20 : 10 }}
+          onPointerDown={e => handlePointerDown(e, 'max')}
+          onPointerUp={handlePointerUp}
+        />
+      </div>
+    </div>
+  );
+}
+
 export default function JobLossGraph({ job }: Props) {
   const { series, lossKeys, status, refreshLoss } = useJobLossLog(job.id, 2000);
+
+  // Parse job config to get total steps
+  const trainSteps = useMemo(() => {
+    try {
+      if (!job.job_config) return 10000;
+      const c = JSON.parse(job.job_config);
+      // Try to find steps in various locations
+      const steps = c?.config?.process?.[0]?.train?.steps ?? c?.process?.[0]?.train?.steps ?? c?.train?.steps;
+      if (typeof steps === 'number') return steps;
+    } catch {}
+    return 10000;
+  }, [job.job_config]);
 
   // Controls
   const [useLogScale, setUseLogScale] = useState(false);
@@ -90,8 +200,8 @@ export default function JobLossGraph({ job }: Props) {
   // UI-only downsample for rendering speed
   const [plotStride, setPlotStride] = useState(1);
 
-  // show only last N points in the chart (0 = all)
-  const [windowSize, setWindowSize] = useState<number>(4000);
+  // Start/End range for windowing
+  const [windowRange, setWindowRange] = useState<[number, number]>([1, trainSteps]);
 
   // quick y clipping for readability
   const [clipOutliers, setClipOutliers] = useState(false);
@@ -116,6 +226,17 @@ export default function JobLossGraph({ job }: Props) {
       return next;
     });
   }, [lossKeys]);
+
+  // Update windowRange if trainSteps changes drastically and range is out of bounds
+  useEffect(() => {
+    setWindowRange(prev => {
+      const [s, e] = prev;
+      if (e > trainSteps) {
+        return [Math.min(s, trainSteps), trainSteps];
+      }
+      return prev;
+    });
+  }, [trainSteps]);
 
   const activeKeys = useMemo(() => lossKeys.filter(k => enabled[k] !== false), [lossKeys, enabled]);
 
@@ -169,10 +290,13 @@ export default function JobLossGraph({ job }: Props) {
 
     const processPoints = (rawPts: { step: number; value: number; image_path?: string | null }[], outKey: string) => {
       let r = rawPts;
-      // windowing (applies after stride)
-      if (windowSize > 0 && r.length > windowSize) {
-        r = r.slice(r.length - windowSize);
+      
+      // Windowing by range
+      const [startStep, endStep] = windowRange;
+      if (startStep > 1 || endStep < trainSteps) {
+        r = r.filter(p => p.step >= startStep && p.step <= endStep);
       }
+
       const smooth = emaSmoothPoints(r, alpha);
       out[outKey] = { raw: r, smooth };
     };
@@ -206,7 +330,7 @@ export default function JobLossGraph({ job }: Props) {
     }
 
     return out;
-  }, [series, activeKeys, smoothing, plotStride, windowSize, useLogScale, enabledDatasets]);
+  }, [series, activeKeys, smoothing, plotStride, windowRange, useLogScale, enabledDatasets, trainSteps]);
 
   const chartData = useMemo(() => {
     // Merge series into one array of objects keyed by step.
@@ -575,20 +699,20 @@ export default function JobLossGraph({ job }: Props) {
 
           <div className="bg-gray-950 border border-gray-800 rounded-lg p-3 md:col-span-2">
             <div className="flex items-center justify-between mb-1">
-              <label className="block text-xs text-gray-400">Window (last N points)</label>
-              <span className="text-xs text-gray-300">{windowSize === 0 ? 'all' : windowSize.toLocaleString()}</span>
+              <label className="block text-xs text-gray-400">Window (steps)</label>
+              <span className="text-xs text-gray-300">
+                {windowRange[0]} - {windowRange[1]}
+              </span>
             </div>
-            <input
-              type="range"
-              min={0}
-              max={20000}
-              step={250}
-              value={windowSize}
-              onChange={e => setWindowSize(Number(e.target.value))}
-              className="w-full accent-blue-500"
+            <DualSlider
+              min={1}
+              max={trainSteps}
+              value={windowRange}
+              onChange={setWindowRange}
+              className="w-full pt-1"
             />
             <div className="mt-2 text-[11px] text-gray-500">
-              Set to 0 to show all (not recommended for very long runs).
+              Select step range to display (total steps: {trainSteps.toLocaleString()}).
             </div>
           </div>
         </div>
