@@ -193,6 +193,7 @@ export default function JobLossGraph({ job }: Props) {
   const [useLogScale, setUseLogScale] = useState(false);
   const [showRaw, setShowRaw] = useState(false);
   const [showSmoothed, setShowSmoothed] = useState(true);
+  const [showGlobal, setShowGlobal] = useState(true);
 
   // 0..100 slider. 100 = no smoothing, 0 = heavy smoothing.
   const [smoothing, setSmoothing] = useState(90);
@@ -513,6 +514,7 @@ export default function JobLossGraph({ job }: Props) {
                 />
 
                 {activeKeys.map(k => {
+                  if (!showGlobal) return null;
                   const color = strokeForKey(k);
                   // Render Global
                   return (
@@ -526,6 +528,7 @@ export default function JobLossGraph({ job }: Props) {
                           strokeWidth={1.25}
                           dot={false}
                           isAnimationActive={false}
+                          connectNulls
                         />
                       )}
                       {showSmoothed && (
@@ -537,6 +540,7 @@ export default function JobLossGraph({ job }: Props) {
                           strokeWidth={2}
                           dot={false}
                           isAnimationActive={false}
+                          connectNulls
                         />
                       )}
                     </g>
@@ -562,6 +566,7 @@ export default function JobLossGraph({ job }: Props) {
                             strokeWidth={1.25}
                             dot={false}
                             isAnimationActive={false}
+                            connectNulls
                           />
                         )}
                         {showSmoothed && (
@@ -573,6 +578,7 @@ export default function JobLossGraph({ job }: Props) {
                             strokeWidth={2}
                             dot={false}
                             isAnimationActive={false}
+                            connectNulls
                           />
                         )}
                       </g>
@@ -591,6 +597,7 @@ export default function JobLossGraph({ job }: Props) {
           <div className="bg-gray-950 border border-gray-800 rounded-lg p-3">
             <label className="block text-xs text-gray-400 mb-2">Display</label>
             <div className="flex flex-wrap gap-2">
+              <ToggleButton checked={showGlobal} onClick={() => setShowGlobal(v => !v)} label="Global" />
               <ToggleButton checked={showSmoothed} onClick={() => setShowSmoothed(v => !v)} label="Smoothed" />
               <ToggleButton checked={showRaw} onClick={() => setShowRaw(v => !v)} label="Raw" />
               <ToggleButton checked={useLogScale} onClick={() => setUseLogScale(v => !v)} label="Log Y" />
