@@ -264,6 +264,8 @@ class BaseSDTrainProcess(BaseTrainProcess):
         self.current_boundary_index = 0
         self.steps_this_boundary = 0
         self.num_consecutive_oom = 0
+        self.batches_seen = 0
+        self.epoch_rng_state = None
 
     def post_process_generate_image_config_list(self, generate_image_config_list: List[GenerateImageConfig]):
         # override in subclass
@@ -401,6 +403,7 @@ class BaseSDTrainProcess(BaseTrainProcess):
         info = OrderedDict({
             'step': self.step_num,
             'epoch': self.epoch_num,
+            'batches_seen': self.batches_seen,
         })
         return info
 
@@ -419,7 +422,9 @@ class BaseSDTrainProcess(BaseTrainProcess):
             pt_files = [f for f in items if f.endswith('.pt')]
             # separate optimizer files
             optimizer_files = [f for f in pt_files if f.endswith('_optimizer.pt')]
-            pt_files = [f for f in pt_files if f not in optimizer_files]
+            scheduler_files = [f for f in pt_files if f.endswith('_scheduler.pt')]
+            rng_files = [f for f in pt_files if f.endswith('_rng.pt')]
+            pt_files = [f for f in pt_files if f not in optimizer_files and f not in scheduler_files and f not in rng_files]
             
             directories = [d for d in items if os.path.isdir(d) and not d.endswith('.safetensors')]
             embed_files = []
@@ -447,6 +452,10 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 critic_items.sort(key=os.path.getctime)
             if optimizer_files:
                 optimizer_files.sort(key=os.path.getctime)
+            if scheduler_files:
+                scheduler_files.sort(key=os.path.getctime)
+            if rng_files:
+                rng_files.sort(key=os.path.getctime)
 
             # Combine and sort the lists
             combined_items = safetensors_files + directories + pt_files
@@ -462,11 +471,13 @@ class BaseSDTrainProcess(BaseTrainProcess):
                                     :-num_saves_to_keep] if safetensors_files else []
             pt_files_to_remove = pt_files[:-num_saves_to_keep] if pt_files else []
             optimizer_files_to_remove = optimizer_files[:-num_saves_to_keep] if optimizer_files else []
+            scheduler_files_to_remove = scheduler_files[:-num_saves_to_keep] if scheduler_files else []
+            rng_files_to_remove = rng_files[:-num_saves_to_keep] if rng_files else []
             directories_to_remove = directories[:-num_saves_to_keep] if directories else []
             embeddings_to_remove = embed_files[:-num_saves_to_keep] if embed_files else []
             critic_to_remove = critic_items[:-num_saves_to_keep] if critic_items else []
 
-            items_to_remove = safetensors_to_remove + pt_files_to_remove + directories_to_remove + embeddings_to_remove + critic_to_remove + optimizer_files_to_remove
+            items_to_remove = safetensors_to_remove + pt_files_to_remove + directories_to_remove + embeddings_to_remove + critic_to_remove + optimizer_files_to_remove + scheduler_files_to_remove + rng_files_to_remove
 
             # remove all but the latest max_step_saves_to_keep
             # items_to_remove = combined_items[:-num_saves_to_keep]
@@ -686,6 +697,28 @@ class BaseSDTrainProcess(BaseTrainProcess):
             except Exception as e:
                 print_acc(e)
                 print_acc("Could not save optimizer")
+        
+        # save scheduler
+        if self.lr_scheduler is not None:
+            try:
+                filename = f'{self.job.name}{step_num}_scheduler.pt'
+                file_path = os.path.join(self.save_root, filename)
+                torch.save(self.lr_scheduler.state_dict(), file_path)
+                print_acc(f"Saved scheduler to {file_path}")
+            except Exception as e:
+                print_acc(e)
+                print_acc("Could not save scheduler")
+        
+        # save random state
+        if self.epoch_rng_state is not None:
+            try:
+                filename = f'{self.job.name}{step_num}_rng.pt'
+                file_path = os.path.join(self.save_root, filename)
+                torch.save(self.epoch_rng_state, file_path)
+                print_acc(f"Saved RNG state to {file_path}")
+            except Exception as e:
+                print_acc(e)
+                print_acc("Could not save RNG state")
 
         self.clean_up_saves()
         self.post_save_hook(file_path)
@@ -822,6 +855,10 @@ class BaseSDTrainProcess(BaseTrainProcess):
                     paths = [p for p in paths if '_cn' not in p]
                 if '_optimizer' not in name:
                     paths = [p for p in paths if '_optimizer' not in p]
+                if '_scheduler' not in name:
+                    paths = [p for p in paths if '_scheduler' not in p]
+                if '_rng' not in name:
+                    paths = [p for p in paths if '_rng' not in p]
 
                 if len(paths) > 0:
                     latest_path = max(paths, key=os.path.getctime)
@@ -858,8 +895,31 @@ class BaseSDTrainProcess(BaseTrainProcess):
             self.step_num = meta['training_info']['step']
             if 'epoch' in meta['training_info']:
                 self.epoch_num = meta['training_info']['epoch']
+            if 'batches_seen' in meta['training_info']:
+                self.batches_seen = meta['training_info']['batches_seen']
             self.start_step = self.step_num
             print_acc(f"Found step {self.step_num} in metadata, starting from there")
+            
+            # load RNG state if it exists
+            step_num_str = str(self.step_num).zfill(9)
+            rng_filename = f'{self.job.name}_{step_num_str}_rng.pt'
+            rng_path = os.path.join(self.save_root, rng_filename)
+            if not os.path.exists(rng_path):
+                # fallback to legacy/unversioned
+                rng_filename = f'{self.job.name}_rng.pt'
+                rng_path = os.path.join(self.save_root, rng_filename)
+            
+            if os.path.exists(rng_path):
+                try:
+                    rng_state = torch.load(rng_path, weights_only=False)
+                    torch.set_rng_state(rng_state['cpu'])
+                    torch.cuda.set_rng_state_all(rng_state['cuda'])
+                    np.random.set_state(rng_state['numpy'])
+                    random.setstate(rng_state['python'])
+                    print_acc(f"Loaded RNG state from {rng_path}")
+                except Exception as e:
+                    print_acc(f"Failed to load RNG state from {rng_path}")
+                    print_acc(e)
 
     def load_weights(self, path):
         if self.network is not None:
@@ -2016,6 +2076,25 @@ class BaseSDTrainProcess(BaseTrainProcess):
             **lr_scheduler_params
         )
         self.lr_scheduler = lr_scheduler
+        
+        # load scheduler state if exists
+        step_num_str = str(self.step_num).zfill(9)
+        scheduler_state_filename = f'{self.job.name}_{step_num_str}_scheduler.pt'
+        scheduler_state_file_path = os.path.join(self.save_root, scheduler_state_filename)
+        if not os.path.exists(scheduler_state_file_path):
+            # fallback to legacy/unversioned
+            scheduler_state_filename = f'{self.job.name}_scheduler.pt'
+            scheduler_state_file_path = os.path.join(self.save_root, scheduler_state_filename)
+
+        if os.path.exists(scheduler_state_file_path):
+            try:
+                print_acc(f"Loading scheduler state from {scheduler_state_file_path}")
+                scheduler_state_dict = torch.load(scheduler_state_file_path, weights_only=False)
+                self.lr_scheduler.load_state_dict(scheduler_state_dict)
+                del scheduler_state_dict
+            except Exception as e:
+                print_acc(f"Failed to load scheduler state from {scheduler_state_file_path}")
+                print_acc(e)
 
         ### HOOk ###
         self.before_dataset_load()
@@ -2057,6 +2136,19 @@ class BaseSDTrainProcess(BaseTrainProcess):
         if self.data_loader is not None:
             dataloader = self.data_loader
             dataloader_iterator = iter(dataloader)
+            # fast forward if needed
+            if self.batches_seen > 0:
+                print_acc(f"Fast forwarding dataloader by {self.batches_seen} batches to resume epoch")
+                for _ in tqdm(range(self.batches_seen), desc="Fast forwarding dataloader"):
+                    try:
+                        next(dataloader_iterator)
+                    except StopIteration:
+                        # this shouldn't happen if batches_seen is correct and deterministic,
+                        # but if it does, we just reset
+                        print_acc("StopIteration reached during fast forward")
+                        dataloader_iterator = iter(dataloader)
+                        self.batches_seen = 0
+                        break
         else:
             dataloader = None
             dataloader_iterator = None
@@ -2145,12 +2237,14 @@ class BaseSDTrainProcess(BaseTrainProcess):
                         try:
                             with self.timer('get_batch'):
                                 batch = next(dataloader_iterator)
+                                self.batches_seen += 1
                         except StopIteration:
                             with self.timer('reset_batch'):
                                 # hit the end of an epoch, reset
                                 if self.progress_bar is not None:
                                     self.progress_bar.pause()
                                 dataloader_iterator = iter(dataloader)
+                                self.batches_seen = 0
                                 trigger_dataloader_setup_epoch(dataloader)
                                 self.epoch_num += 1
                                 if self.train_config.gradient_accumulation_steps == -1:
@@ -2159,6 +2253,7 @@ class BaseSDTrainProcess(BaseTrainProcess):
                                     self.grad_accumulation_step = 0
                             with self.timer('get_batch'):
                                 batch = next(dataloader_iterator)
+                                self.batches_seen += 1
                             if self.progress_bar is not None:
                                 self.progress_bar.unpause()
                     else:

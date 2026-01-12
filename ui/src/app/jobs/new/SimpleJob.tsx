@@ -513,6 +513,65 @@ export default function SimpleJob({
                   min={0}
                   required
                 />
+                <SelectInput
+                  label="LR Scheduler"
+                  className="pt-2"
+                  value={jobConfig.config.process[0].train.lr_scheduler || 'constant'}
+                  onChange={value => setJobConfig(value, 'config.process[0].train.lr_scheduler')}
+                  options={[
+                    { value: 'constant', label: 'Constant' },
+                    { value: 'constant_with_warmup', label: 'Constant with Warmup' },
+                    { value: 'cosine', label: 'Cosine' },
+                    { value: 'cosine_with_restarts', label: 'Cosine with Restarts' },
+                    { value: 'linear', label: 'Linear' },
+                    { value: 'step', label: 'Step' },
+                  ]}
+                />
+                {['constant_with_warmup', 'cosine', 'linear', 'cosine_with_restarts'].includes(
+                  jobConfig.config.process[0].train.lr_scheduler || 'constant',
+                ) && (
+                  <NumberInput
+                    label="Warmup Steps"
+                    className="pt-2"
+                    value={jobConfig.config.process[0].train.lr_scheduler_params?.num_warmup_steps ?? null}
+                    onChange={value =>
+                      setJobConfig(value, 'config.process[0].train.lr_scheduler_params.num_warmup_steps')
+                    }
+                    placeholder="eg. 100"
+                    min={0}
+                  />
+                )}
+                {['cosine_with_restarts'].includes(jobConfig.config.process[0].train.lr_scheduler || 'constant') && (
+                  <NumberInput
+                    label="Num Cycles"
+                    className="pt-2"
+                    value={jobConfig.config.process[0].train.lr_scheduler_params?.num_cycles ?? null}
+                    onChange={value => setJobConfig(value, 'config.process[0].train.lr_scheduler_params.num_cycles')}
+                    placeholder="eg. 1"
+                    min={1}
+                  />
+                )}
+                {['step'].includes(jobConfig.config.process[0].train.lr_scheduler || 'constant') && (
+                  <>
+                    <NumberInput
+                      label="Step Size"
+                      className="pt-2"
+                      value={jobConfig.config.process[0].train.lr_scheduler_params?.step_size ?? null}
+                      onChange={value => setJobConfig(value, 'config.process[0].train.lr_scheduler_params.step_size')}
+                      placeholder="eg. 1000"
+                      min={1}
+                    />
+                    <NumberInput
+                      label="Gamma"
+                      className="pt-2"
+                      value={jobConfig.config.process[0].train.lr_scheduler_params?.gamma ?? null}
+                      onChange={value => setJobConfig(value, 'config.process[0].train.lr_scheduler_params.gamma')}
+                      placeholder="eg. 0.1"
+                      min={0}
+                      max={1}
+                    />
+                  </>
+                )}
               </div>
               <div>
                 {disableSections.includes('train.timestep_type') ? null : (
