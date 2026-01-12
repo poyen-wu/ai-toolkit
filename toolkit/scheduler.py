@@ -1,6 +1,13 @@
 import torch
 from typing import Optional
-from diffusers.optimization import SchedulerType, TYPE_TO_SCHEDULER_FUNCTION, get_constant_schedule_with_warmup
+from diffusers.optimization import (
+    SchedulerType, 
+    TYPE_TO_SCHEDULER_FUNCTION, 
+    get_constant_schedule_with_warmup,
+    get_cosine_schedule_with_warmup,
+    get_linear_schedule_with_warmup,
+    get_cosine_with_hard_restarts_schedule_with_warmup
+)
 
 
 def get_lr_scheduler(
@@ -8,20 +15,36 @@ def get_lr_scheduler(
         optimizer: torch.optim.Optimizer,
         **kwargs,
 ):
+    # Extract common parameters
+    num_warmup_steps = kwargs.pop('num_warmup_steps', 0)
+    num_training_steps = kwargs.pop('total_iters', None)
+    num_cycles = kwargs.pop('num_cycles', 1)
+    
+    # Cleaning up kwargs for pytorch schedulers
+    # These might be passed but not used by all
+    if 'step_size' not in kwargs:
+        kwargs.pop('step_size', None)
+    if 'gamma' not in kwargs:
+        kwargs.pop('gamma', None)
+
     if name == "cosine":
-        if 'total_iters' in kwargs:
-            kwargs['T_max'] = kwargs.pop('total_iters')
-        return torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, **kwargs
+        return get_cosine_schedule_with_warmup(
+            optimizer, 
+            num_warmup_steps=num_warmup_steps, 
+            num_training_steps=num_training_steps, 
+            num_cycles=num_cycles if num_cycles is not None else 0.5
         )
     elif name == "cosine_with_restarts":
-        if 'total_iters' in kwargs:
-            kwargs['T_0'] = kwargs.pop('total_iters')
-        return torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-            optimizer, **kwargs
+        return get_cosine_with_hard_restarts_schedule_with_warmup(
+            optimizer, 
+            num_warmup_steps=num_warmup_steps, 
+            num_training_steps=num_training_steps, 
+            num_cycles=num_cycles if num_cycles is not None else 1
         )
     elif name == "step":
-
+        # StepLR needs step_size and gamma. They should be in kwargs if passed from UI.
+        # But we need to make sure we don't pass extra stuff.
+        # kwargs already popped warmup, total_iters, num_cycles.
         return torch.optim.lr_scheduler.StepLR(
             optimizer, **kwargs
         )
@@ -31,17 +54,20 @@ def get_lr_scheduler(
 
         return torch.optim.lr_scheduler.ConstantLR(optimizer, **kwargs)
     elif name == "linear":
-
-        return torch.optim.lr_scheduler.LinearLR(
-            optimizer, **kwargs
+        return get_linear_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=num_warmup_steps,
+            num_training_steps=num_training_steps
         )
     elif name == 'constant_with_warmup':
         # see if num_warmup_steps is in kwargs
-        if 'num_warmup_steps' not in kwargs:
+        if num_warmup_steps is None:
             print(f"WARNING: num_warmup_steps not in kwargs. Using default value of 1000")
-            kwargs['num_warmup_steps'] = 1000
-        del kwargs['total_iters']
-        return get_constant_schedule_with_warmup(optimizer, **kwargs)
+            num_warmup_steps = 1000
+        return get_constant_schedule_with_warmup(
+            optimizer, 
+            num_warmup_steps=num_warmup_steps
+        )
     else:
         # try to use a diffusers scheduler
         print(f"Trying to use diffusers scheduler {name}")
