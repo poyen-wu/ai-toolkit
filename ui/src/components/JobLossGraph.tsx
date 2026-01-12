@@ -49,6 +49,18 @@ function hashToIndex(str: string, mod: number) {
   return Math.abs(h) % mod;
 }
 
+function getDatasetFromPath(path: string | null | undefined): string {
+  if (!path) return 'unknown';
+  const clean = path.replace(/\\/g, '/');
+  const parts = clean.split(',').map(p => {
+    p = p.trim();
+    const segs = p.split('/');
+    if (segs.length > 1) segs.pop();
+    return segs.join('/');
+  });
+  return parts.join(' | ');
+}
+
 const PALETTE = [
   'rgba(96,165,250,1)', // blue-400
   'rgba(52,211,153,1)', // emerald-400
@@ -87,6 +99,9 @@ export default function JobLossGraph({ job }: Props) {
   // which loss series are enabled (default: all enabled)
   const [enabled, setEnabled] = useState<Record<string, boolean>>({});
 
+  // which datasets are enabled
+  const [enabledDatasets, setEnabledDatasets] = useState<Record<string, boolean>>({});
+
   // keep enabled map in sync with discovered keys (enable new ones automatically)
   useEffect(() => {
     setEnabled(prev => {
@@ -104,6 +119,41 @@ export default function JobLossGraph({ job }: Props) {
 
   const activeKeys = useMemo(() => lossKeys.filter(k => enabled[k] !== false), [lossKeys, enabled]);
 
+  const allDatasets = useMemo(() => {
+    const set = new Set<string>();
+    for (const key of activeKeys) {
+      const pts = series[key] ?? [];
+      for (const p of pts) {
+        if (p.image_path) {
+          set.add(getDatasetFromPath(p.image_path));
+        }
+      }
+    }
+    return Array.from(set).sort();
+  }, [series, activeKeys]);
+
+  // Keep datasets in sync
+  useEffect(() => {
+    setEnabledDatasets(prev => {
+      const next = { ...prev };
+      let changed = false;
+      for (const ds of allDatasets) {
+        if (next[ds] === undefined) {
+          next[ds] = false;
+          changed = true;
+        }
+      }
+      // drop removed
+      for (const k of Object.keys(next)) {
+        if (!allDatasets.includes(k)) {
+          delete next[k];
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [allDatasets]);
+
   const perSeries = useMemo(() => {
     // Build per-series processed point arrays (raw + smoothed), then merge by step for charting.
     const stride = Math.max(1, plotStride | 0);
@@ -112,49 +162,70 @@ export default function JobLossGraph({ job }: Props) {
     const t = clamp01(smoothing / 100);
     const alpha = 1.0 - t * 0.98; // 1.0 -> 0.02
 
-    const out: Record<string, { raw: { step: number; value: number; image_path?: string | null }[]; smooth: { step: number; value: number }[] }> =
-      {};
+    const out: Record<
+      string,
+      { raw: { step: number; value: number; image_path?: string | null }[]; smooth: { step: number; value: number }[] }
+    > = {};
+
+    const processPoints = (rawPts: { step: number; value: number; image_path?: string | null }[], outKey: string) => {
+      let r = rawPts;
+      // windowing (applies after stride)
+      if (windowSize > 0 && r.length > windowSize) {
+        r = r.slice(r.length - windowSize);
+      }
+      const smooth = emaSmoothPoints(r, alpha);
+      out[outKey] = { raw: r, smooth };
+    };
 
     for (const key of activeKeys) {
       const pts: LossPoint[] = series[key] ?? [];
 
-      let raw = pts
+      // Filter and stride first
+      const rawAll = pts
         .filter(p => p.value !== null && Number.isFinite(p.value as number))
         .map(p => ({ step: p.step, value: p.value as number, image_path: p.image_path }))
         .filter(p => (useLogScale ? p.value > 0 : true))
         .filter((_, idx) => idx % stride === 0);
 
-      // windowing (applies after stride)
-      if (windowSize > 0 && raw.length > windowSize) {
-        raw = raw.slice(raw.length - windowSize);
+      // Process global
+      processPoints(rawAll, key);
+
+      // Group by dataset
+      const byDataset: Record<string, typeof rawAll> = {};
+      for (const p of rawAll) {
+        const ds = getDatasetFromPath(p.image_path);
+        if (!byDataset[ds]) byDataset[ds] = [];
+        byDataset[ds].push(p);
       }
 
-      const smooth = emaSmoothPoints(raw, alpha);
-
-      out[key] = { raw, smooth };
+      for (const ds of Object.keys(byDataset)) {
+        if (enabledDatasets[ds]) {
+          processPoints(byDataset[ds], `${key}__ds__${ds}`);
+        }
+      }
     }
 
     return out;
-  }, [series, activeKeys, smoothing, plotStride, windowSize, useLogScale]);
+  }, [series, activeKeys, smoothing, plotStride, windowSize, useLogScale, enabledDatasets]);
 
   const chartData = useMemo(() => {
     // Merge series into one array of objects keyed by step.
-    // Fields: `${key}__raw` and `${key}__smooth`
     const map = new Map<number, any>();
 
-    for (const key of activeKeys) {
-      const s = perSeries[key];
+    // We iterate over everything in perSeries
+    for (const fullKey of Object.keys(perSeries)) {
+      const s = perSeries[fullKey];
       if (!s) continue;
 
       for (const p of s.raw) {
         const row = map.get(p.step) ?? { step: p.step };
-        row[`${key}__raw`] = p.value;
+        row[`${fullKey}__raw`] = p.value;
         if (p.image_path) row['image_path'] = p.image_path;
         map.set(p.step, row);
       }
       for (const p of s.smooth) {
         const row = map.get(p.step) ?? { step: p.step };
-        row[`${key}__smooth`] = p.value;
+        row[`${fullKey}__smooth`] = p.value;
         map.set(p.step, row);
       }
     }
@@ -162,7 +233,7 @@ export default function JobLossGraph({ job }: Props) {
     const arr = Array.from(map.values());
     arr.sort((a, b) => a.step - b.step);
     return arr;
-  }, [activeKeys, perSeries]);
+  }, [perSeries]);
 
   const hasData = chartData.length > 1;
 
@@ -171,8 +242,10 @@ export default function JobLossGraph({ job }: Props) {
 
     // Collect visible values (prefer smoothed if shown, else raw)
     const vals: number[] = [];
+    const keysToCheck = Object.keys(perSeries);
+
     for (const row of chartData) {
-      for (const key of activeKeys) {
+      for (const key of keysToCheck) {
         const k = showSmoothed ? `${key}__smooth` : `${key}__raw`;
         const v = row[k];
         if (typeof v === 'number' && Number.isFinite(v)) vals.push(v);
@@ -186,7 +259,7 @@ export default function JobLossGraph({ job }: Props) {
 
     if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo === hi) return ['auto', 'auto'];
     return [lo, hi];
-  }, [clipOutliers, chartData, activeKeys, showSmoothed]);
+  }, [clipOutliers, chartData, perSeries, showSmoothed]);
 
   const latestSummary = useMemo(() => {
     // Provide a simple “latest” readout for the first active series
@@ -317,7 +390,7 @@ export default function JobLossGraph({ job }: Props) {
 
                 {activeKeys.map(k => {
                   const color = strokeForKey(k);
-
+                  // Render Global
                   return (
                     <g key={k}>
                       {showRaw && (
@@ -344,6 +417,43 @@ export default function JobLossGraph({ job }: Props) {
                       )}
                     </g>
                   );
+                })}
+                {/* Render Per-Dataset */}
+                {activeKeys.map(k => {
+                  return allDatasets.map(ds => {
+                    if (!enabledDatasets[ds]) return null;
+                    const fullKey = `${k}__ds__${ds}`;
+                    // Derive color from fullKey for uniqueness
+                    const color = strokeForKey(fullKey);
+                    const name = `${k} (${ds})`;
+
+                    return (
+                      <g key={fullKey}>
+                        {showRaw && (
+                          <Line
+                            type="monotone"
+                            dataKey={`${fullKey}__raw`}
+                            name={`${name} (raw)`}
+                            stroke={color.replace('1)', '0.40)')}
+                            strokeWidth={1.25}
+                            dot={false}
+                            isAnimationActive={false}
+                          />
+                        )}
+                        {showSmoothed && (
+                          <Line
+                            type="monotone"
+                            dataKey={`${fullKey}__smooth`}
+                            name={name}
+                            stroke={color}
+                            strokeWidth={2}
+                            dot={false}
+                            isAnimationActive={false}
+                          />
+                        )}
+                      </g>
+                    );
+                  });
                 })}
               </LineChart>
             </ResponsiveContainer>
@@ -386,6 +496,45 @@ export default function JobLossGraph({ job }: Props) {
                   >
                     <span className="inline-block h-2 w-2 rounded-full mr-2" style={{ background: strokeForKey(k) }} />
                     {k}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="bg-gray-950 border border-gray-800 rounded-lg p-3">
+            <label className="block text-xs text-gray-400 mb-2">Datasets</label>
+            {allDatasets.length === 0 ? (
+              <div className="text-sm text-gray-400">No datasets found.</div>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {allDatasets.map(ds => (
+                  <button
+                    key={ds}
+                    type="button"
+                    onClick={() => setEnabledDatasets(prev => ({ ...prev, [ds]: !prev[ds] }))}
+                    className={[
+                      'px-3 py-1 rounded-md text-xs border transition-colors',
+                      !enabledDatasets[ds]
+                        ? 'bg-gray-900 text-gray-400 border-gray-800 hover:bg-gray-800/60'
+                        : 'bg-gray-900 text-gray-200 border-gray-800 hover:bg-gray-800/60',
+                    ].join(' ')}
+                    aria-pressed={enabledDatasets[ds]}
+                    title={ds}
+                  >
+                    {/* Use color from first active key + dataset for dot, or neutral if multiple keys? */}
+                    {/* Using just one color for the dot might be misleading if multiple keys are active. */}
+                    {/* Let's try to use the color of the first active key + this dataset. */}
+                    <span
+                      className="inline-block h-2 w-2 rounded-full mr-2"
+                      style={{
+                        background:
+                          activeKeys.length > 0
+                            ? strokeForKey(`${activeKeys[0]}__ds__${ds}`)
+                            : 'gray',
+                      }}
+                    />
+                    {ds}
                   </button>
                 ))}
               </div>
