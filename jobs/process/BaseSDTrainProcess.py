@@ -417,6 +417,10 @@ class BaseSDTrainProcess(BaseTrainProcess):
             # Separate files and directories
             safetensors_files = [f for f in items if f.endswith('.safetensors')]
             pt_files = [f for f in items if f.endswith('.pt')]
+            # separate optimizer files
+            optimizer_files = [f for f in pt_files if f.endswith('_optimizer.pt')]
+            pt_files = [f for f in pt_files if f not in optimizer_files]
+            
             directories = [d for d in items if os.path.isdir(d) and not d.endswith('.safetensors')]
             embed_files = []
             # do embedding files
@@ -441,6 +445,8 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 embed_files.sort(key=os.path.getctime)
             if critic_items:
                 critic_items.sort(key=os.path.getctime)
+            if optimizer_files:
+                optimizer_files.sort(key=os.path.getctime)
 
             # Combine and sort the lists
             combined_items = safetensors_files + directories + pt_files
@@ -455,11 +461,12 @@ class BaseSDTrainProcess(BaseTrainProcess):
             safetensors_to_remove = safetensors_files[
                                     :-num_saves_to_keep] if safetensors_files else []
             pt_files_to_remove = pt_files[:-num_saves_to_keep] if pt_files else []
+            optimizer_files_to_remove = optimizer_files[:-num_saves_to_keep] if optimizer_files else []
             directories_to_remove = directories[:-num_saves_to_keep] if directories else []
             embeddings_to_remove = embed_files[:-num_saves_to_keep] if embed_files else []
             critic_to_remove = critic_items[:-num_saves_to_keep] if critic_items else []
 
-            items_to_remove = safetensors_to_remove + pt_files_to_remove + directories_to_remove + embeddings_to_remove + critic_to_remove
+            items_to_remove = safetensors_to_remove + pt_files_to_remove + directories_to_remove + embeddings_to_remove + critic_to_remove + optimizer_files_to_remove
 
             # remove all but the latest max_step_saves_to_keep
             # items_to_remove = combined_items[:-num_saves_to_keep]
@@ -668,7 +675,7 @@ class BaseSDTrainProcess(BaseTrainProcess):
         # save optimizer
         if self.optimizer is not None:
             try:
-                filename = f'optimizer.pt'
+                filename = f'{self.job.name}{step_num}_optimizer.pt'
                 file_path = os.path.join(self.save_root, filename)
                 try:
                     state_dict = unwrap_model(self.optimizer).state_dict()
@@ -813,6 +820,8 @@ class BaseSDTrainProcess(BaseTrainProcess):
                     paths = [p for p in paths if '_t2i' not in p]
                 if '_cn' not in name:
                     paths = [p for p in paths if '_cn' not in p]
+                if '_optimizer' not in name:
+                    paths = [p for p in paths if '_optimizer' not in p]
 
                 if len(paths) > 0:
                     latest_path = max(paths, key=os.path.getctime)
@@ -1949,8 +1958,16 @@ class BaseSDTrainProcess(BaseTrainProcess):
             self.optimizer.enable_paramiter_swapping(self.train_config.paramiter_swapping_factor)
 
         # check if it exists
-        optimizer_state_filename = f'optimizer.pt'
+        # construct versioned filename
+        step_num_str = str(self.step_num).zfill(9)
+        optimizer_state_filename = f'{self.job.name}_{step_num_str}_optimizer.pt'
         optimizer_state_file_path = os.path.join(self.save_root, optimizer_state_filename)
+        
+        # fallback to legacy
+        if not os.path.exists(optimizer_state_file_path):
+            optimizer_state_filename = f'optimizer.pt'
+            optimizer_state_file_path = os.path.join(self.save_root, optimizer_state_filename)
+
         if os.path.exists(optimizer_state_file_path):
             # try to load
             # previous param groups
