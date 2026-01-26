@@ -916,16 +916,19 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 rng_path = os.path.join(self.save_root, rng_filename)
             
             if os.path.exists(rng_path):
-                try:
-                    rng_state = torch.load(rng_path, weights_only=False)
-                    torch.set_rng_state(rng_state['cpu'])
-                    torch.cuda.set_rng_state_all(rng_state['cuda'])
-                    np.random.set_state(rng_state['numpy'])
-                    random.setstate(rng_state['python'])
-                    print_acc(f"Loaded RNG state from {rng_path}")
-                except Exception as e:
-                    print_acc(f"Failed to load RNG state from {rng_path}")
-                    print_acc(e)
+                if self.save_config.load_rng_state:
+                    try:
+                        rng_state = torch.load(rng_path, weights_only=False)
+                        torch.set_rng_state(rng_state['cpu'])
+                        torch.cuda.set_rng_state_all(rng_state['cuda'])
+                        np.random.set_state(rng_state['numpy'])
+                        random.setstate(rng_state['python'])
+                        print_acc(f"Loaded RNG state from {rng_path}")
+                    except Exception as e:
+                        print_acc(f"Failed to load RNG state from {rng_path}")
+                        print_acc(e)
+                else:
+                    print_acc(f"Skipping loading RNG state from {rng_path} due to config")
 
     def load_weights(self, path):
         if self.network is not None:

@@ -451,6 +451,12 @@ export default function SimpleJob({
               min={1}
               required
             />
+            <Checkbox
+              label="Load RNG State"
+              checked={jobConfig.config.process[0].save.load_rng_state ?? true}
+              onChange={value => setJobConfig(value, 'config.process[0].save.load_rng_state')}
+              className="pt-2"
+            />
           </Card>
         </div>
         <div>
