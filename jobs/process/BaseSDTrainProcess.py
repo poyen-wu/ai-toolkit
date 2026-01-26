@@ -2162,7 +2162,7 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 if hasattr(sys.stdout, 'terminal'):
                     tqdm_file = sys.stdout.terminal
                 
-                for _ in tqdm(range(self.batches_seen), desc="Fast forwarding dataloader", file=tqdm_file):
+                for _ in tqdm(range(1, self.batches_seen), desc="Fast forwarding dataloader", file=tqdm_file):
                     try:
                         next(dataloader_iterator)
                     except StopIteration:
