@@ -415,7 +415,7 @@ export default function JobLossGraph({ job }: Props) {
             {status === 'loading' && 'Loading...'}
             {status === 'refreshing' && 'Refreshing...'}
             {status === 'error' && 'Error'}
-            {status === 'success' && hasData && `${chartData.length.toLocaleString()} steps`}
+            {status === 'success' && hasData && `${chartData[chartData.length - 1].step.toLocaleString()} steps`}
             {status === 'success' && !hasData && 'No data yet'}
           </span>
         </div>
