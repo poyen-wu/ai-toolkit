@@ -43,6 +43,9 @@ export default function TrainingForm() {
 
     const datasetOptions = datasets.map(name => ({ value: path.join(settings.DATASETS_FOLDER, name), label: name }));
     setDatasetOptions(datasetOptions);
+
+    if (runId || cloneId) return;
+
     const defaultDatasetPath = defaultDatasetConfig.folder_path;
 
     for (let i = 0; i < jobConfig.config.process[0].datasets.length; i++) {
@@ -53,7 +56,7 @@ export default function TrainingForm() {
         }
       }
     }
-  }, [datasets, settings, isSettingsLoaded, datasetFetchStatus]);
+  }, [datasets, settings, isSettingsLoaded, datasetFetchStatus, runId, cloneId]);
 
   // clone existing job
   useEffect(() => {
