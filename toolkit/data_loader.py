@@ -436,6 +436,8 @@ class AiToolkitDataset(LatentCachingMixin, ControlCachingMixin, CLIPCachingMixin
         # remove items in the _controls_ folder
         file_list = [x for x in file_list if not os.path.basename(os.path.dirname(x)) == "_controls"]
 
+        file_list.sort()
+
         if self.dataset_config.num_repeats > 1:
             # repeat the list
             file_list = file_list * self.dataset_config.num_repeats
@@ -601,6 +603,7 @@ def get_dataloader_from_datasets(
         dataset_options,
         batch_size=1,
         sd: 'StableDiffusion' = None,
+        generator=None,
 ) -> DataLoader:
     if dataset_options is None or len(dataset_options) == 0:
         return None
@@ -653,6 +656,9 @@ def get_dataloader_from_datasets(
     else:
         dataloader_kwargs['num_workers'] = dataset_config_list[0].num_workers
         dataloader_kwargs['prefetch_factor'] = dataset_config_list[0].prefetch_factor
+
+    if generator is not None:
+        dataloader_kwargs['generator'] = generator
 
     if has_buckets:
         # make sure they all have buckets

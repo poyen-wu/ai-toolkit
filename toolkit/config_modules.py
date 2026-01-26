@@ -351,6 +351,7 @@ LossTarget = Literal['noise', 'source', 'unaugmented', 'differential_noise']
 
 class TrainConfig:
     def __init__(self, **kwargs):
+        self.seed: int = kwargs.get('seed', None)
         self.noise_scheduler = kwargs.get('noise_scheduler', 'ddpm')
         self.content_or_style: ContentOrStyleType = kwargs.get('content_or_style', 'balanced')
         self.content_or_style_reg: ContentOrStyleType = kwargs.get('content_or_style', 'balanced')

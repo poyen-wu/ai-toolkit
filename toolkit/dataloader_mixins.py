@@ -191,9 +191,18 @@ class BucketsMixin:
                 batch = bucket.file_list_idx[start_idx:end_idx]
                 self.batch_indices.append(batch)
 
-    def shuffle_buckets(self: 'AiToolkitDataset'):
-        for key, bucket in self.buckets.items():
-            random.shuffle(bucket.file_list_idx)
+    def shuffle_buckets(self: 'AiToolkitDataset', rng=None):
+        if rng is None:
+            seed = 0
+            if hasattr(self, 'dataset_path'):
+                seed = int(hashlib.sha256(self.dataset_path.encode('utf-8')).hexdigest(), 16) % (10**8)
+            rng = random.Random(seed)
+
+        # Sort keys to ensure deterministic iteration order
+        sorted_keys = sorted(self.buckets.keys())
+        for key in sorted_keys:
+            bucket = self.buckets[key]
+            rng.shuffle(bucket.file_list_idx)
 
     def setup_buckets(self: 'AiToolkitDataset', quiet=False):
         if not hasattr(self, 'file_list'):
@@ -211,6 +220,12 @@ class BucketsMixin:
         resolution = config.resolution
         bucket_tolerance = config.bucket_tolerance
         file_list: List['FileItemDTO'] = self.file_list
+        
+        # make sure we are deterministic
+        seed = 0
+        if hasattr(self, 'dataset_path'):
+             seed = int(hashlib.sha256(self.dataset_path.encode('utf-8')).hexdigest(), 16) % (10**8)
+        rng = random.Random(seed)
 
         # for file_item in enumerate(file_list):
         for idx, file_item in enumerate(file_list):
@@ -221,7 +236,7 @@ class BucketsMixin:
             did_process_poi = False
             if file_item.has_point_of_interest:
                 # Attempt to process the poi if we can. It wont process if the image is smaller than the resolution
-                did_process_poi = file_item.setup_poi_bucket()
+                did_process_poi = file_item.setup_poi_bucket(rng=rng)
             if self.dataset_config.square_crop:
                 # we scale first so smallest size matches resolution
                 scale_factor_x = resolution / width
@@ -263,8 +278,8 @@ class BucketsMixin:
 
                 if self.dataset_config.random_crop:
                     # random crop
-                    crop_x = random.randint(0, file_item.scale_to_width - new_width)
-                    crop_y = random.randint(0, file_item.scale_to_height - new_height)
+                    crop_x = rng.randint(0, file_item.scale_to_width - new_width)
+                    crop_y = rng.randint(0, file_item.scale_to_height - new_height)
                     file_item.crop_x = crop_x
                     file_item.crop_y = crop_y
                 else:
@@ -282,7 +297,7 @@ class BucketsMixin:
             self.buckets[bucket_key].file_list_idx.append(idx)
 
         # print the buckets
-        self.shuffle_buckets()
+        self.shuffle_buckets(rng=rng)
         self.build_batch_indices()
         if not quiet:
             print_acc(f'Bucket sizes for {self.dataset_path}:')
@@ -1626,7 +1641,10 @@ class PoiFileItemDTOMixin:
                 # flip the poi
                 self.poi_y = self.height - self.poi_y - self.poi_height
 
-    def setup_poi_bucket(self: 'FileItemDTO'):
+    def setup_poi_bucket(self: 'FileItemDTO', rng=None):
+        if rng is None:
+            rng = random
+        
         initial_width = int(self.width * self.dataset_config.scale)
         initial_height = int(self.height * self.dataset_config.scale)
         # we are using poi, so we need to calculate the bucket based on the poi
@@ -1647,26 +1665,26 @@ class PoiFileItemDTOMixin:
         while True:
             # crop left
             if poi_x > 0:
-                poi_x = random.randint(0, poi_x)
+                poi_x = rng.randint(0, poi_x)
             else:
                 poi_x = 0
 
             # crop right
             cr_min = poi_x + poi_width
             if cr_min < initial_width:
-                crop_right = random.randint(poi_x + poi_width, initial_width)
+                crop_right = rng.randint(poi_x + poi_width, initial_width)
             else:
                 crop_right = initial_width
 
             poi_width = crop_right - poi_x
 
             if poi_y > 0:
-                poi_y = random.randint(0, poi_y)
+                poi_y = rng.randint(0, poi_y)
             else:
                 poi_y = 0
 
             if poi_y + poi_height < initial_height:
-                crop_bottom = random.randint(poi_y + poi_height, initial_height)
+                crop_bottom = rng.randint(poi_y + poi_height, initial_height)
             else:
                 crop_bottom = initial_height
 

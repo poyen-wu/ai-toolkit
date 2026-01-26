@@ -267,6 +267,8 @@ class BaseSDTrainProcess(BaseTrainProcess):
         self.num_consecutive_oom = 0
         self.batches_seen = 0
         self.epoch_rng_state = None
+        self.data_loader_generator = torch.Generator(device='cpu')
+        self.data_loader_reg_generator = torch.Generator(device='cpu')
 
     def post_process_generate_image_config_list(self, generate_image_config_list: List[GenerateImageConfig]):
         # override in subclass
@@ -2108,11 +2110,15 @@ class BaseSDTrainProcess(BaseTrainProcess):
         ### HOOk ###
         self.before_dataset_load()
         # load datasets if passed in the root process
+        # Only use custom generator if seed is set, otherwise use global RNG (which is restored)
+        gen_loader = self.data_loader_generator if self.train_config.seed is not None else None
+        gen_reg = self.data_loader_reg_generator if self.train_config.seed is not None else None
+
         if self.datasets is not None:
-            self.data_loader = get_dataloader_from_datasets(self.datasets, self.train_config.batch_size, self.sd)
+            self.data_loader = get_dataloader_from_datasets(self.datasets, self.train_config.batch_size, self.sd, generator=gen_loader)
         if self.datasets_reg is not None:
             self.data_loader_reg = get_dataloader_from_datasets(self.datasets_reg, self.train_config.batch_size,
-                                                                self.sd)
+                                                                self.sd, generator=gen_reg)
 
         flush()
         self.last_save_step = self.step_num
@@ -2143,6 +2149,8 @@ class BaseSDTrainProcess(BaseTrainProcess):
             self.progress_bar = None
 
         if self.data_loader is not None:
+            if self.train_config.seed is not None:
+                self.data_loader_generator.manual_seed(self.train_config.seed + self.epoch_num)
             dataloader = self.data_loader
             dataloader_iterator = iter(dataloader)
             # fast forward if needed
@@ -2169,6 +2177,8 @@ class BaseSDTrainProcess(BaseTrainProcess):
             dataloader_iterator = None
 
         if self.data_loader_reg is not None:
+            if self.train_config.seed is not None:
+                self.data_loader_reg_generator.manual_seed(self.train_config.seed + self.epoch_num + 10000)
             dataloader_reg = self.data_loader_reg
             dataloader_iterator_reg = iter(dataloader_reg)
         else:
@@ -2258,6 +2268,10 @@ class BaseSDTrainProcess(BaseTrainProcess):
                                 # hit the end of an epoch, reset
                                 if self.progress_bar is not None:
                                     self.progress_bar.pause()
+                                
+                                if self.train_config.seed is not None:
+                                    self.data_loader_generator.manual_seed(self.train_config.seed + self.epoch_num + 1)
+                                
                                 dataloader_iterator = iter(dataloader)
                                 self.batches_seen = 0
                                 trigger_dataloader_setup_epoch(dataloader)

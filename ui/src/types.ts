@@ -117,6 +117,7 @@ export interface EMAConfig {
 
 export interface TrainConfig {
   batch_size: number;
+  seed?: number;
   bypass_guidance_embedding?: boolean;
   steps: number;
   gradient_accumulation: number;

@@ -489,6 +489,14 @@ export default function SimpleJob({
                   min={1}
                   required
                 />
+                <NumberInput
+                  label="Seed"
+                  className="pt-2"
+                  value={jobConfig.config.process[0].train.seed ?? null}
+                  onChange={value => setJobConfig(value, 'config.process[0].train.seed')}
+                  placeholder="Random"
+                  min={0}
+                />
               </div>
               <div>
                 <SelectInput
