@@ -712,6 +712,18 @@ class SDTrainer(BaseSDTrainProcess):
             if self.train_config.do_differential_guidance:
                 with torch.no_grad():
                     guidance_scale = self.train_config.differential_guidance_scale
+                    if self.train_config.do_scheduled_differential_guidance:
+                        # scale the guidance by the learning rate
+                        # we use the first param group for the learning rate
+                        current_lr = self.optimizer.param_groups[0]['lr']
+                        initial_lr = self.optimizer.param_groups[0].get('initial_lr', self.train_config.lr)
+                        # just in case initial_lr is 0 (should not happen)
+                        if initial_lr == 0:
+                            initial_lr = self.train_config.lr
+                        
+                        ratio = float(current_lr) / float(initial_lr)
+                        guidance_scale = 1.0 + (guidance_scale - 1.0) * ratio
+                        
                     target = noise_pred + guidance_scale * (target - noise_pred)
             
         if target is None:

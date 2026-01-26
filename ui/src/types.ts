@@ -146,6 +146,7 @@ export interface TrainConfig {
   loss_type: 'mse' | 'mae' | 'wavelet' | 'stepped';
   do_differential_guidance?: boolean;
   differential_guidance_scale?: number;
+  do_scheduled_differential_guidance?: boolean;
   lr_scheduler?: string;
   lr_scheduler_params?: {
     num_warmup_steps?: number;

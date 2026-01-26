@@ -776,6 +776,12 @@ export default function SimpleJob({
                       placeholder="eg. 3.0"
                       min={0}
                     />
+                    <Checkbox
+                      label="Scheduled Differential Guidance"
+                      className="pt-2"
+                      checked={jobConfig.config.process[0].train.do_scheduled_differential_guidance || false}
+                      onChange={value => setJobConfig(value, 'config.process[0].train.do_scheduled_differential_guidance')}
+                    />
                   </>
                 )}
               </div>
