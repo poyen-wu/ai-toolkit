@@ -9,6 +9,7 @@ import os
 import re
 import traceback
 from typing import Union, List, Optional
+import sys
 
 import numpy as np
 import yaml
@@ -710,15 +711,20 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 print_acc("Could not save scheduler")
         
         # save random state
-        if self.epoch_rng_state is not None:
-            try:
-                filename = f'{self.job.name}{step_num}_rng.pt'
-                file_path = os.path.join(self.save_root, filename)
-                torch.save(self.epoch_rng_state, file_path)
-                print_acc(f"Saved RNG state to {file_path}")
-            except Exception as e:
-                print_acc(e)
-                print_acc("Could not save RNG state")
+        try:
+            self.epoch_rng_state = {
+                'cpu': torch.get_rng_state(),
+                'cuda': torch.cuda.get_rng_state_all(),
+                'numpy': np.random.get_state(),
+                'python': random.getstate(),
+            }
+            filename = f'{self.job.name}{step_num}_rng.pt'
+            file_path = os.path.join(self.save_root, filename)
+            torch.save(self.epoch_rng_state, file_path)
+            print_acc(f"Saved RNG state to {file_path}")
+        except Exception as e:
+            print_acc(e)
+            print_acc("Could not save RNG state")
 
         self.clean_up_saves()
         self.post_save_hook(file_path)
@@ -2139,7 +2145,13 @@ class BaseSDTrainProcess(BaseTrainProcess):
             # fast forward if needed
             if self.batches_seen > 0:
                 print_acc(f"Fast forwarding dataloader by {self.batches_seen} batches to resume epoch")
-                for _ in tqdm(range(self.batches_seen), desc="Fast forwarding dataloader"):
+                
+                # check if we are using a logger and if so, get the terminal
+                tqdm_file = sys.stdout
+                if hasattr(sys.stdout, 'terminal'):
+                    tqdm_file = sys.stdout.terminal
+                
+                for _ in tqdm(range(self.batches_seen), desc="Fast forwarding dataloader", file=tqdm_file):
                     try:
                         next(dataloader_iterator)
                     except StopIteration:
