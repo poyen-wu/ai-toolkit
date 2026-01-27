@@ -302,7 +302,10 @@ export default function JobLossGraph({ job }: Props) {
       out[outKey] = { raw: r, smooth };
     };
 
-    for (const key of activeKeys) {
+    const keysToProcess = [...activeKeys];
+    if (series['timestep']) keysToProcess.push('timestep');
+
+    for (const key of keysToProcess) {
       const pts: LossPoint[] = series[key] ?? [];
 
       // Filter and stride first
@@ -463,6 +466,7 @@ export default function JobLossGraph({ job }: Props) {
                     if (active && payload && payload.length) {
                       const data = payload[0].payload;
                       const imagePath = data.image_path;
+                      const timestep = data['timestep__raw'] ?? data['timestep__smooth'];
                       return (
                         <div
                           style={{
@@ -475,6 +479,11 @@ export default function JobLossGraph({ job }: Props) {
                           }}
                         >
                           <p style={{ color: 'rgba(255,255,255,0.75)', marginBottom: 4 }}>{`step ${label}`}</p>
+                          {typeof timestep === 'number' && (
+                            <div style={{ color: 'rgba(255,255,255,0.5)', marginBottom: 2 }}>
+                              {`timestep: ${formatNum(timestep)}`}
+                            </div>
+                          )}
                           {payload.map((entry: any, index: number) => (
                             <div key={index} style={{ color: entry.color, marginBottom: 2 }}>
                               {`${entry.name}: ${formatNum(Number(entry.value))}`}
