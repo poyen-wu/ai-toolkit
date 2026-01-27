@@ -1238,6 +1238,7 @@ class SDTrainer(BaseSDTrainProcess):
                     self.sd.text_encoder.to(self.sd.te_torch_dtype)
 
             noisy_latents, noise, timesteps, conditioned_prompts, imgs = self.process_general_training_batch(batch)
+            avg_timestep = timesteps.float().mean().item()
             if self.train_config.do_cfg or self.train_config.do_random_cfg:
                 # pick random negative prompts
                 if self.negative_prompt_pool is not None:
@@ -2043,7 +2044,7 @@ class SDTrainer(BaseSDTrainProcess):
                             # else:
                             self.accelerator.backward(loss)
 
-        return loss.detach()
+        return loss.detach(), avg_timestep
         # flush()
 
     def hook_train_loop(self, batch: Union[DataLoaderBatchDTO, List[DataLoaderBatchDTO]]):
