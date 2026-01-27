@@ -58,8 +58,9 @@ export default function useJobLossLog(jobID: string, reloadInterval: null | numb
       const wantedLossKeys = (newKeys.filter(isLossKey).length ? newKeys.filter(isLossKey) : ['loss']).sort();
 
       const keysToFetch = [...wantedLossKeys];
-      if (newKeys.includes('timestep')) {
-        keysToFetch.push('timestep');
+      const timestepKey = newKeys.find(k => /timestep/i.test(k));
+      if (timestepKey) {
+        keysToFetch.push(timestepKey);
       }
 
       // Step 2: fetch each loss key incrementally (since_step per key if polling)

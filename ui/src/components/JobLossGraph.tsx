@@ -303,7 +303,10 @@ export default function JobLossGraph({ job }: Props) {
     };
 
     const keysToProcess = [...activeKeys];
-    if (series['timestep']) keysToProcess.push('timestep');
+    const timestepKey = Object.keys(series).find(k => /timestep/i.test(k));
+    if (timestepKey && !keysToProcess.includes(timestepKey)) {
+      keysToProcess.push(timestepKey);
+    }
 
     for (const key of keysToProcess) {
       const pts: LossPoint[] = series[key] ?? [];
@@ -466,7 +469,9 @@ export default function JobLossGraph({ job }: Props) {
                     if (active && payload && payload.length) {
                       const data = payload[0].payload;
                       const imagePath = data.image_path;
-                      const timestep = data['timestep__raw'] ?? data['timestep__smooth'];
+                      const tsKeyRaw = Object.keys(data).find(k => /timestep.*__raw/i.test(k));
+                      const tsKeySmooth = Object.keys(data).find(k => /timestep.*__smooth/i.test(k));
+                      const timestep = (tsKeyRaw ? data[tsKeyRaw] : null) ?? (tsKeySmooth ? data[tsKeySmooth] : null);
                       return (
                         <div
                           style={{
