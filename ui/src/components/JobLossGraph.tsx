@@ -213,20 +213,28 @@ export default function JobLossGraph({ job }: Props) {
   // which datasets are enabled
   const [enabledDatasets, setEnabledDatasets] = useState<Record<string, boolean>>({});
 
+  const timestepKey = useMemo(() => Object.keys(series).find(k => /timestep/i.test(k)), [series]);
+
+  const selectableKeys = useMemo(() => {
+    const k = [...lossKeys];
+    if (timestepKey && !k.includes(timestepKey)) k.push(timestepKey);
+    return k.sort();
+  }, [lossKeys, timestepKey]);
+
   // keep enabled map in sync with discovered keys (enable new ones automatically)
   useEffect(() => {
     setEnabled(prev => {
       const next = { ...prev };
-      for (const k of lossKeys) {
+      for (const k of selectableKeys) {
         if (next[k] === undefined) next[k] = true;
       }
       // drop removed keys
       for (const k of Object.keys(next)) {
-        if (!lossKeys.includes(k)) delete next[k];
+        if (!selectableKeys.includes(k)) delete next[k];
       }
       return next;
     });
-  }, [lossKeys]);
+  }, [selectableKeys]);
 
   // Update windowRange if trainSteps changes drastically and range is out of bounds
   useEffect(() => {
@@ -239,11 +247,14 @@ export default function JobLossGraph({ job }: Props) {
     });
   }, [trainSteps]);
 
-  const activeKeys = useMemo(() => lossKeys.filter(k => enabled[k] !== false), [lossKeys, enabled]);
+  const activeKeys = useMemo(() => selectableKeys.filter(k => enabled[k] !== false), [selectableKeys, enabled]);
+  
+  const isTimestepMode = useMemo(() => activeKeys.length === 1 && activeKeys[0] === timestepKey, [activeKeys, timestepKey]);
 
   const allDatasets = useMemo(() => {
     const set = new Set<string>();
     for (const key of activeKeys) {
+      if (key === timestepKey && isTimestepMode) continue; // Skip dataset grouping for timestep mode
       const pts = series[key] ?? [];
       for (const p of pts) {
         if (p.image_path) {
@@ -252,7 +263,7 @@ export default function JobLossGraph({ job }: Props) {
       }
     }
     return Array.from(set).sort();
-  }, [series, activeKeys]);
+  }, [series, activeKeys, timestepKey, isTimestepMode]);
 
   // Keep datasets in sync
   useEffect(() => {
@@ -303,12 +314,52 @@ export default function JobLossGraph({ job }: Props) {
     };
 
     const keysToProcess = [...activeKeys];
-    const timestepKey = Object.keys(series).find(k => /timestep/i.test(k));
     if (timestepKey && !keysToProcess.includes(timestepKey)) {
       keysToProcess.push(timestepKey);
     }
 
     for (const key of keysToProcess) {
+      // Special Mode: Timestep only
+      if (isTimestepMode && key === timestepKey) {
+        const lossKey = selectableKeys.find(k => k !== timestepKey && /loss/i.test(k)) || selectableKeys[0];
+        const lossPts = series[lossKey] || [];
+        const tsPts = series[timestepKey] || [];
+
+        const stepLoss = new Map<number, number>();
+        lossPts.forEach(p => {
+          if (p.value !== null && Number.isFinite(p.value)) stepLoss.set(p.step, p.value!);
+        });
+
+        const [startStep, endStep] = windowRange;
+        const byTs = new Map<number, number[]>();
+
+        for (let i = 0; i < tsPts.length; i += stride) {
+          const p = tsPts[i];
+          if (p.step < startStep || p.step > endStep) continue;
+          if (p.value === null || !Number.isFinite(p.value)) continue;
+
+          const l = stepLoss.get(p.step);
+          if (l !== undefined) {
+             const ts = Math.round(p.value!);
+             const arr = byTs.get(ts);
+             if (arr) arr.push(l);
+             else byTs.set(ts, [l]);
+          }
+        }
+
+        const raw: { step: number; value: number; image_path?: string | null }[] = [];
+        for (const [ts, vals] of byTs.entries()) {
+          const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+          raw.push({ step: ts, value: avg, image_path: null });
+        }
+        raw.sort((a, b) => a.step - b.step);
+
+        const smooth = emaSmoothPoints(raw, alpha);
+        out[key] = { raw, smooth };
+        continue;
+      }
+
+      // Normal processing
       const pts: LossPoint[] = series[key] ?? [];
 
       // Filter and stride first
@@ -337,7 +388,7 @@ export default function JobLossGraph({ job }: Props) {
     }
 
     return out;
-  }, [series, activeKeys, smoothing, plotStride, windowRange, useLogScale, enabledDatasets, trainSteps]);
+  }, [series, activeKeys, smoothing, plotStride, windowRange, useLogScale, enabledDatasets, trainSteps, isTimestepMode, timestepKey, selectableKeys]);
 
   const chartData = useMemo(() => {
     // Merge series into one array of objects keyed by step.
@@ -377,6 +428,9 @@ export default function JobLossGraph({ job }: Props) {
 
     for (const row of chartData) {
       for (const key of keysToCheck) {
+        // Exclude timestep values from Y domain if not in Timestep Mode
+        if (!isTimestepMode && timestepKey && key.includes(timestepKey)) continue;
+
         const k = showSmoothed ? `${key}__smooth` : `${key}__raw`;
         const v = row[k];
         if (typeof v === 'number' && Number.isFinite(v)) vals.push(v);
@@ -390,7 +444,7 @@ export default function JobLossGraph({ job }: Props) {
 
     if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo === hi) return ['auto', 'auto'];
     return [lo, hi];
-  }, [clipOutliers, chartData, perSeries, showSmoothed]);
+  }, [clipOutliers, chartData, perSeries, showSmoothed, isTimestepMode, timestepKey]);
 
   const latestSummary = useMemo(() => {
     // Provide a simple “latest” readout for the first active series
@@ -467,6 +521,28 @@ export default function JobLossGraph({ job }: Props) {
                   cursor={{ stroke: 'rgba(59,130,246,0.25)', strokeWidth: 1 }}
                   content={({ active, payload, label }: any) => {
                     if (active && payload && payload.length) {
+                      if (isTimestepMode) {
+                        return (
+                          <div
+                            style={{
+                              background: 'rgba(17,24,39,0.96)',
+                              border: '1px solid rgba(31,41,55,1)',
+                              borderRadius: 10,
+                              padding: '8px 12px',
+                              color: 'rgba(255,255,255,0.9)',
+                              fontSize: 12,
+                            }}
+                          >
+                            <p style={{ color: 'rgba(255,255,255,0.75)', marginBottom: 4 }}>{`timestep ${label}`}</p>
+                            {payload.map((entry: any, index: number) => (
+                              <div key={index} style={{ color: entry.color, marginBottom: 2 }}>
+                                {`Loss: ${formatNum(Number(entry.value))}`}
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      }
+
                       const data = payload[0].payload;
                       const imagePath = data.image_path;
                       const tsKeyRaw = Object.keys(data).find(k => /timestep.*__raw/i.test(k));
@@ -529,6 +605,9 @@ export default function JobLossGraph({ job }: Props) {
 
                 {activeKeys.map(k => {
                   if (!showGlobal) return null;
+                  // In mixed mode, don't plot timestep as a line, only keep it for tooltip
+                  if (!isTimestepMode && k === timestepKey) return null;
+                  
                   const color = strokeForKey(k);
                   // Render Global
                   return (
@@ -621,11 +700,11 @@ export default function JobLossGraph({ job }: Props) {
 
           <div className="bg-gray-950 border border-gray-800 rounded-lg p-3">
             <label className="block text-xs text-gray-400 mb-2">Series</label>
-            {lossKeys.length === 0 ? (
+            {selectableKeys.length === 0 ? (
               <div className="text-sm text-gray-400">No loss keys found yet.</div>
             ) : (
               <div className="flex flex-wrap gap-2">
-                {lossKeys.map(k => (
+                {selectableKeys.map(k => (
                   <button
                     key={k}
                     type="button"
