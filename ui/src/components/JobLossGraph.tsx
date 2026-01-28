@@ -344,6 +344,7 @@ export default function JobLossGraph({ job }: Props) {
 
   // Start/End range for windowing
   const [windowRange, setWindowRange] = useState<[number, number]>([1, trainSteps]);
+  const [timestepRange, setTimestepRange] = useState<[number, number]>([0, 1000]);
 
   // quick y clipping for readability
   const [clipOutliers, setClipOutliers] = useState(false);
@@ -355,6 +356,34 @@ export default function JobLossGraph({ job }: Props) {
   const [enabledDatasets, setEnabledDatasets] = useState<Record<string, boolean>>({});
 
   const timestepKey = useMemo(() => Object.keys(series).find(k => /timestep/i.test(k)), [series]);
+
+  // Determine the actual range of timesteps available in the data
+  const dataTimestepRange = useMemo((): [number, number] => {
+    if (!timestepKey) return [0, 1000];
+    const pts = series[timestepKey] || [];
+    if (pts.length === 0) return [0, 1000];
+    let min = Infinity;
+    let max = -Infinity;
+    for (const p of pts) {
+      if (p.value !== null && Number.isFinite(p.value)) {
+        if (p.value < min) min = p.value;
+        if (p.value > max) max = p.value;
+      }
+    }
+    if (min === Infinity) return [0, 1000];
+    return [Math.floor(min), Math.ceil(max)];
+  }, [series, timestepKey]);
+
+  // Update timestepRange if data range changes significantly
+  useEffect(() => {
+    setTimestepRange(prev => {
+      const [min, max] = dataTimestepRange;
+      if (prev[0] === 0 && prev[1] === 1000) {
+        return [min, max];
+      }
+      return [Math.max(prev[0], min), Math.min(prev[1], max)];
+    });
+  }, [dataTimestepRange]);
 
   const correctedKey = 'loss/loss (timestep corrected)';
 
@@ -505,13 +534,34 @@ export default function JobLossGraph({ job }: Props) {
       }
     > = {};
 
+    // Create a mapping of step to timestep for filtering
+    const stepToTimestep = new Map<number, number>();
+    if (timestepKey) {
+      (series[timestepKey] || []).forEach(p => {
+        if (p.value !== null && Number.isFinite(p.value)) {
+          stepToTimestep.set(p.step, p.value);
+        }
+      });
+    }
+
     const processPoints = (rawPts: { step: number; value: number; image_path?: string | null }[], outKey: string) => {
       let r = rawPts;
 
-      // Windowing by range
+      // Windowing by step range
       const [startStep, endStep] = windowRange;
       if (startStep > 1 || endStep < trainSteps) {
         r = r.filter(p => p.step >= startStep && p.step <= endStep);
+      }
+
+      // Windowing by timestep range
+      if (timestepKey) {
+        const [minTs, maxTs] = timestepRange;
+        r = r.filter(p => {
+          const ts = stepToTimestep.get(p.step);
+          if (ts === undefined) return true; // Keep points without timestep info? Or filter them? 
+          // Usually we want to filter if we have the info.
+          return ts >= minTs && ts <= maxTs;
+        });
       }
 
       const smooth = emaSmoothPoints(r, alpha);
@@ -605,6 +655,7 @@ export default function JobLossGraph({ job }: Props) {
     showInterpolated,
     plotStride,
     windowRange,
+    timestepRange,
     useLogScale,
     enabledDatasets,
     trainSteps,
@@ -1153,6 +1204,26 @@ export default function JobLossGraph({ job }: Props) {
             />
             <div className="mt-2 text-[11px] text-gray-500">
               Select step range to display (total steps: {trainSteps.toLocaleString()}).
+            </div>
+          </div>
+
+          <div className="bg-gray-950 border border-gray-800 rounded-lg p-3 md:col-span-2">
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-xs text-gray-400">Timestep Filter</label>
+              <span className="text-xs text-gray-300">
+                {timestepRange[0]} - {timestepRange[1]}
+              </span>
+            </div>
+            <DualSlider
+              min={dataTimestepRange[0]}
+              max={dataTimestepRange[1]}
+              value={timestepRange}
+              onChange={setTimestepRange}
+              className="w-full pt-1"
+              disabled={!timestepKey}
+            />
+            <div className="mt-2 text-[11px] text-gray-500">
+              Filter data by timestep range (available: {dataTimestepRange[0]} - {dataTimestepRange[1]}).
             </div>
           </div>
         </div>
