@@ -320,8 +320,8 @@ export default function JobLossGraph({ job }: Props) {
   // Controls
   const [useLogScale, setUseLogScale] = useState(false);
   const [showRaw, setShowRaw] = useState(false);
-  const [showSmoothed, setShowSmoothed] = useState(true);
-  const [showInterpolated, setShowInterpolated] = useState(false);
+  const [showSmoothed, setShowSmoothed] = useState(false);
+  const [showInterpolated, setShowInterpolated] = useState(true);
   const [showGlobal, setShowGlobal] = useState(true);
 
   // 0..100 slider. 100 = no smoothing, 0 = heavy smoothing.
@@ -361,7 +361,13 @@ export default function JobLossGraph({ job }: Props) {
     setEnabled(prev => {
       const next = { ...prev };
       for (const k of selectableKeys) {
-        if (next[k] === undefined) next[k] = true;
+        if (next[k] === undefined) {
+          if (k === correctedKey) {
+            next[k] = false;
+          } else {
+            next[k] = true;
+          }
+        }
       }
       // drop removed keys
       for (const k of Object.keys(next)) {
