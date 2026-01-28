@@ -336,6 +336,7 @@ export default function JobLossGraph({ job }: Props) {
   // 0..100 slider. 100 = no smoothing, 0 = heavy smoothing.
   const [smoothing, setSmoothing] = useState(90);
   const [interpolateBins, setInterpolateBins] = useState(50);
+  const [correctedBins, setCorrectedBins] = useState(1000);
   const [removeOutliers, setRemoveOutliers] = useState(true);
 
   // UI-only downsample for rendering speed
@@ -468,7 +469,7 @@ export default function JobLossGraph({ job }: Props) {
           .map(m => ({ step: m.ts, value: m.loss }))
           .sort((a, b) => a.step - b.step);
 
-        const smoothedTsCurve = interpolateSmoothPoints(pointsByTs, 1000, removeOutliers);
+        const smoothedTsCurve = interpolateSmoothPoints(pointsByTs, correctedBins, removeOutliers);
         // smoothedTsCurve has the same length as pointsByTs and corresponds 1:1
         const tsToExpected = new Map<number, number>();
         smoothedTsCurve.forEach(p => {
@@ -599,6 +600,7 @@ export default function JobLossGraph({ job }: Props) {
     activeKeys,
     smoothing,
     interpolateBins,
+    correctedBins,
     removeOutliers,
     showInterpolated,
     plotStride,
@@ -798,6 +800,7 @@ export default function JobLossGraph({ job }: Props) {
                             padding: '8px 12px',
                             color: 'rgba(255,255,255,0.9)',
                             fontSize: 12,
+                            zIndex: 100,
                           }}
                         >
                           <p style={{ color: 'rgba(255,255,255,0.75)', marginBottom: 4 }}>{`step ${label}`}</p>
@@ -1084,6 +1087,37 @@ export default function JobLossGraph({ job }: Props) {
               onChange={e => setInterpolateBins(Number(e.target.value))}
               className="w-full accent-blue-500"
               disabled={!showInterpolated}
+            />
+          </div>
+
+          <div className="bg-gray-950 border border-gray-800 rounded-lg p-3">
+            <div className="flex items-center justify-between mb-1">
+              <div className="flex items-center gap-2">
+                <label className="block text-xs text-gray-400">Corrected Bins</label>
+                <button
+                  type="button"
+                  onClick={() => setRemoveOutliers(v => !v)}
+                  disabled={!enabled[correctedKey]}
+                  className={[
+                    'px-1.5 py-0.5 rounded text-[10px] border transition-colors',
+                    removeOutliers
+                      ? 'bg-blue-500/10 text-blue-300 border-blue-500/30 hover:bg-blue-500/15'
+                      : 'bg-gray-900 text-gray-500 border-gray-800 hover:bg-gray-800/60',
+                  ].join(' ')}
+                >
+                  Remove outliers
+                </button>
+              </div>
+              <span className="text-xs text-gray-300">{correctedBins}</span>
+            </div>
+            <input
+              type="range"
+              min={1}
+              max={2000}
+              value={correctedBins}
+              onChange={e => setCorrectedBins(Number(e.target.value))}
+              className="w-full accent-blue-500"
+              disabled={!enabled[correctedKey]}
             />
           </div>
 
