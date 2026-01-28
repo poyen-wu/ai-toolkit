@@ -335,16 +335,16 @@ export default function JobLossGraph({ job }: Props) {
 
   // 0..100 slider. 100 = no smoothing, 0 = heavy smoothing.
   const [smoothing, setSmoothing] = useState(90);
-  const [interpolateBins, setInterpolateBins] = useState(50);
-  const [correctedBins, setCorrectedBins] = useState(1000);
-  const [removeOutliers, setRemoveOutliers] = useState(true);
+  const [interpolateBins, setInterpolateBins] = useState(5);
+  const [correctedBins, setCorrectedBins] = useState(15);
+  const [removeOutliers, setRemoveOutliers] = useState(false);
 
   // UI-only downsample for rendering speed
   const [plotStride, setPlotStride] = useState(1);
 
   // Start/End range for windowing
   const [windowRange, setWindowRange] = useState<[number, number]>([1, trainSteps]);
-  const [timestepRange, setTimestepRange] = useState<[number, number]>([0, 1000]);
+  const [timestepRange, setTimestepRange] = useState<[number, number]>([50, 950]);
 
   // quick y clipping for readability
   const [clipOutliers, setClipOutliers] = useState(false);
