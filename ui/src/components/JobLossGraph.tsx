@@ -345,11 +345,16 @@ export default function JobLossGraph({ job }: Props) {
 
   const timestepKey = useMemo(() => Object.keys(series).find(k => /timestep/i.test(k)), [series]);
 
+  const correctedKey = 'loss/loss (timestep corrected)';
+
   const selectableKeys = useMemo(() => {
     const k = [...lossKeys];
     if (timestepKey && !k.includes(timestepKey)) k.push(timestepKey);
+    if (series['loss/loss'] && timestepKey) {
+      k.push(correctedKey);
+    }
     return k.sort();
-  }, [lossKeys, timestepKey]);
+  }, [lossKeys, timestepKey, series]);
 
   // keep enabled map in sync with discovered keys (enable new ones automatically)
   useEffect(() => {
@@ -418,6 +423,55 @@ export default function JobLossGraph({ job }: Props) {
   }, [allDatasets]);
 
   const perSeries = useMemo(() => {
+    let augmentedSeries = { ...series };
+    if (series['loss/loss'] && timestepKey) {
+      const lossPts = series['loss/loss'];
+      const tsPts = series[timestepKey]!;
+
+      const stepToTs = new Map<number, number>();
+      tsPts.forEach(p => {
+        if (p.value !== null && Number.isFinite(p.value)) stepToTs.set(p.step, p.value!);
+      });
+
+      const matched: { step: number; loss: number; ts: number }[] = [];
+      let totalLoss = 0;
+      lossPts.forEach(p => {
+        const ts = stepToTs.get(p.step);
+        if (ts !== undefined && p.value !== null && Number.isFinite(p.value)) {
+          matched.push({ step: p.step, loss: p.value!, ts });
+          totalLoss += p.value!;
+        }
+      });
+
+      if (matched.length > 5) {
+        const avgLoss = totalLoss / matched.length;
+
+        // Use the robust interpolateSmoothPoints algorithm
+        // We need to pass it points where "step" is actually "timestep"
+        const pointsByTs = matched
+          .map(m => ({ step: m.ts, value: m.loss }))
+          .sort((a, b) => a.step - b.step);
+
+        const smoothedTsCurve = interpolateSmoothPoints(pointsByTs, 50);
+        // smoothedTsCurve has the same length as pointsByTs and corresponds 1:1
+        const tsToExpected = new Map<number, number>();
+        smoothedTsCurve.forEach(p => {
+          tsToExpected.set(p.step, p.value);
+        });
+
+        const correctedPts: LossPoint[] = matched.map(m => {
+          const expected = tsToExpected.get(m.ts) || avgLoss;
+          const factor = expected > 1e-9 ? avgLoss / expected : 1;
+          return {
+            step: m.step,
+            value: m.loss * factor,
+            image_path: null,
+          };
+        });
+        augmentedSeries[correctedKey] = correctedPts;
+      }
+    }
+
     // Build per-series processed point arrays (raw + smoothed), then merge by step for charting.
     const stride = Math.max(1, plotStride | 0);
 
@@ -457,8 +511,8 @@ export default function JobLossGraph({ job }: Props) {
       // Special Mode: Timestep only
       if (isTimestepMode && key === timestepKey) {
         const lossKey = selectableKeys.find(k => k !== timestepKey && /loss/i.test(k)) || selectableKeys[0];
-        const lossPts = series[lossKey] || [];
-        const tsPts = series[timestepKey] || [];
+        const lossPts = augmentedSeries[lossKey] || [];
+        const tsPts = augmentedSeries[timestepKey] || [];
 
         const stepLoss = new Map<number, number>();
         lossPts.forEach(p => {
@@ -496,14 +550,14 @@ export default function JobLossGraph({ job }: Props) {
       }
 
       // Normal processing
-      const pts: LossPoint[] = series[key] ?? [];
+      const pts: LossPoint[] = augmentedSeries[key] ?? [];
 
       // Filter and stride first
       const rawAll = pts
-        .filter(p => p.value !== null && Number.isFinite(p.value as number))
-        .map(p => ({ step: p.step, value: p.value as number, image_path: p.image_path }))
-        .filter(p => (useLogScale ? p.value > 0 : true))
-        .filter((_, idx) => idx % stride === 0);
+        .filter((p: LossPoint) => p.value !== null && Number.isFinite(p.value as number))
+        .map((p: LossPoint) => ({ step: p.step, value: p.value as number, image_path: p.image_path }))
+        .filter((p: { step: number; value: number }) => (useLogScale ? p.value > 0 : true))
+        .filter((_: any, idx: number) => idx % stride === 0);
 
       // Process global
       processPoints(rawAll, key);
@@ -864,7 +918,7 @@ export default function JobLossGraph({ job }: Props) {
                             name={`${name} (interp)`}
                             stroke={color}
                             strokeWidth={2}
-                            strokeDasharray="4 4"
+                            strokeDasharray="8 1"
                             dot={false}
                             isAnimationActive={false}
                             connectNulls
