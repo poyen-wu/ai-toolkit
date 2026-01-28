@@ -35,7 +35,11 @@ function getMad(values: number[], med: number): number {
   return median(devs);
 }
 
-function interpolateSmoothPoints(points: { step: number; value: number }[], bins: number) {
+function interpolateSmoothPoints(
+  points: { step: number; value: number }[],
+  bins: number,
+  removeOutliers: boolean = true,
+) {
   if (points.length === 0) return [];
   if (points.length < 5) return points;
 
@@ -85,58 +89,60 @@ function interpolateSmoothPoints(points: { step: number; value: number }[], bins
   let currentPoints = points;
   let curvePoints: { step: number; value: number }[] = [];
 
-  // Iterations for outlier removal
-  const iterations = 3;
-  for (let iter = 0; iter < iterations; iter++) {
-    curvePoints = buildCurve(currentPoints);
-    if (curvePoints.length < 2) break;
+  if (removeOutliers) {
+    // Iterations for outlier removal
+    const iterations = 3;
+    for (let iter = 0; iter < iterations; iter++) {
+      curvePoints = buildCurve(currentPoints);
+      if (curvePoints.length < 2) break;
 
-    const binWidth = range / bins;
-    const binDevs: number[][] = Array.from({ length: bins }, () => []);
-    const pointDevs: { idx: number; val: number; binIdx: number }[] = [];
+      const binWidth = range / bins;
+      const binDevs: number[][] = Array.from({ length: bins }, () => []);
+      const pointDevs: { idx: number; val: number; binIdx: number }[] = [];
 
-    // Calculate deviations
-    for (let i = 0; i < currentPoints.length; i++) {
-      const p = currentPoints[i];
-      const baseline = evalCurve(curvePoints, p.step);
-      // Avoid log(0) or negative
-      const v = p.value > 1e-9 ? p.value : 1e-9;
-      const b = baseline > 1e-9 ? baseline : 1e-9;
-      const dev = Math.log(v / b);
+      // Calculate deviations
+      for (let i = 0; i < currentPoints.length; i++) {
+        const p = currentPoints[i];
+        const baseline = evalCurve(curvePoints, p.step);
+        // Avoid log(0) or negative
+        const v = p.value > 1e-9 ? p.value : 1e-9;
+        const b = baseline > 1e-9 ? baseline : 1e-9;
+        const dev = Math.log(v / b);
 
-      const binIdx = Math.min(bins - 1, Math.floor((p.step - minStep) / binWidth));
-      binDevs[binIdx].push(dev);
-      pointDevs.push({ idx: i, val: dev, binIdx });
-    }
-
-    const binStats = binDevs.map(devs => {
-      if (devs.length < 2) return null;
-      const med = median(devs);
-      const mad = getMad(devs, med);
-      return { med, mad };
-    });
-
-    const nextPoints: { step: number; value: number }[] = [];
-    const threshold = 3.5;
-    const k = 1.4826;
-
-    for (let i = 0; i < currentPoints.length; i++) {
-      const { val: dev, binIdx } = pointDevs[i];
-      const stats = binStats[binIdx];
-
-      if (!stats || stats.mad === 0) {
-        nextPoints.push(currentPoints[i]);
-        continue;
+        const binIdx = Math.min(bins - 1, Math.floor((p.step - minStep) / binWidth));
+        binDevs[binIdx].push(dev);
+        pointDevs.push({ idx: i, val: dev, binIdx });
       }
 
-      const z = (dev - stats.med) / (k * stats.mad);
-      if (Math.abs(z) <= threshold) {
-        nextPoints.push(currentPoints[i]);
-      }
-    }
+      const binStats = binDevs.map(devs => {
+        if (devs.length < 2) return null;
+        const med = median(devs);
+        const mad = getMad(devs, med);
+        return { med, mad };
+      });
 
-    if (nextPoints.length === currentPoints.length) break;
-    currentPoints = nextPoints;
+      const nextPoints: { step: number; value: number }[] = [];
+      const threshold = 3.5;
+      const k = 1.4826;
+
+      for (let i = 0; i < currentPoints.length; i++) {
+        const { val: dev, binIdx } = pointDevs[i];
+        const stats = binStats[binIdx];
+
+        if (!stats || stats.mad === 0) {
+          nextPoints.push(currentPoints[i]);
+          continue;
+        }
+
+        const z = (dev - stats.med) / (k * stats.mad);
+        if (Math.abs(z) <= threshold) {
+          nextPoints.push(currentPoints[i]);
+        }
+      }
+
+      if (nextPoints.length === currentPoints.length) break;
+      currentPoints = nextPoints;
+    }
   }
 
   // Final curve
@@ -327,6 +333,7 @@ export default function JobLossGraph({ job }: Props) {
   // 0..100 slider. 100 = no smoothing, 0 = heavy smoothing.
   const [smoothing, setSmoothing] = useState(90);
   const [interpolateBins, setInterpolateBins] = useState(50);
+  const [removeOutliers, setRemoveOutliers] = useState(true);
 
   // UI-only downsample for rendering speed
   const [plotStride, setPlotStride] = useState(1);
@@ -458,7 +465,7 @@ export default function JobLossGraph({ job }: Props) {
           .map(m => ({ step: m.ts, value: m.loss }))
           .sort((a, b) => a.step - b.step);
 
-        const smoothedTsCurve = interpolateSmoothPoints(pointsByTs, 50);
+        const smoothedTsCurve = interpolateSmoothPoints(pointsByTs, 50, removeOutliers);
         // smoothedTsCurve has the same length as pointsByTs and corresponds 1:1
         const tsToExpected = new Map<number, number>();
         smoothedTsCurve.forEach(p => {
@@ -504,7 +511,7 @@ export default function JobLossGraph({ job }: Props) {
       }
 
       const smooth = emaSmoothPoints(r, alpha);
-      const interp = showInterpolated ? interpolateSmoothPoints(r, interpolateBins) : [];
+      const interp = showInterpolated ? interpolateSmoothPoints(r, interpolateBins, removeOutliers) : [];
       out[outKey] = { raw: r, smooth, interp };
     };
 
@@ -550,7 +557,7 @@ export default function JobLossGraph({ job }: Props) {
         raw.sort((a, b) => a.step - b.step);
 
         const smooth = emaSmoothPoints(raw, alpha);
-        const interp = showInterpolated ? interpolateSmoothPoints(raw, interpolateBins) : [];
+        const interp = showInterpolated ? interpolateSmoothPoints(raw, interpolateBins, removeOutliers) : [];
         out[key] = { raw, smooth, interp };
         continue;
       }
@@ -589,6 +596,7 @@ export default function JobLossGraph({ job }: Props) {
     activeKeys,
     smoothing,
     interpolateBins,
+    removeOutliers,
     showInterpolated,
     plotStride,
     windowRange,
@@ -1048,7 +1056,22 @@ export default function JobLossGraph({ job }: Props) {
 
           <div className="bg-gray-950 border border-gray-800 rounded-lg p-3">
             <div className="flex items-center justify-between mb-1">
-              <label className="block text-xs text-gray-400">Interpolate Bins</label>
+              <div className="flex items-center gap-2">
+                <label className="block text-xs text-gray-400">Interpolate Bins</label>
+                <button
+                  type="button"
+                  onClick={() => setRemoveOutliers(v => !v)}
+                  disabled={!showInterpolated}
+                  className={[
+                    'px-1.5 py-0.5 rounded text-[10px] border transition-colors',
+                    removeOutliers
+                      ? 'bg-blue-500/10 text-blue-300 border-blue-500/30 hover:bg-blue-500/15'
+                      : 'bg-gray-900 text-gray-500 border-gray-800 hover:bg-gray-800/60',
+                  ].join(' ')}
+                >
+                  Remove outliers
+                </button>
+              </div>
               <span className="text-xs text-gray-300">{interpolateBins}</span>
             </div>
             <input
