@@ -21,6 +21,134 @@ function clamp01(x: number) {
   return Math.max(0, Math.min(1, x));
 }
 
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 !== 0) return sorted[mid];
+  return (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function getMad(values: number[], med: number): number {
+  if (values.length === 0) return 0;
+  const devs = values.map(v => Math.abs(v - med));
+  return median(devs);
+}
+
+function interpolateSmoothPoints(points: { step: number; value: number }[], bins: number) {
+  if (points.length === 0) return [];
+  if (points.length < 5) return points;
+
+  const minStep = points[0].step;
+  const maxStep = points[points.length - 1].step;
+  const range = maxStep - minStep;
+  if (range <= 0) return points;
+
+  // Helper to build curve (bin centers)
+  const buildCurve = (pts: { step: number; value: number }[]) => {
+    const binWidth = range / bins;
+    const binData: number[][] = Array.from({ length: bins }, () => []);
+
+    for (const p of pts) {
+      const binIdx = Math.min(bins - 1, Math.floor((p.step - minStep) / binWidth));
+      binData[binIdx].push(p.value);
+    }
+
+    const curvePoints: { step: number; value: number }[] = [];
+    for (let i = 0; i < bins; i++) {
+      if (binData[i].length === 0) continue;
+      const val = median(binData[i]);
+      const center = minStep + (i + 0.5) * binWidth;
+      curvePoints.push({ step: center, value: val });
+    }
+    return curvePoints;
+  };
+
+  // Helper to interpolate
+  const evalCurve = (curve: { step: number; value: number }[], x: number) => {
+    if (curve.length === 0) return 0;
+    if (x <= curve[0].step) return curve[0].value;
+    if (x >= curve[curve.length - 1].step) return curve[curve.length - 1].value;
+
+    let i = 0;
+    while (i < curve.length - 1 && curve[i + 1].step < x) {
+      i++;
+    }
+    const p0 = curve[i];
+    const p1 = curve[i + 1];
+    if (p1.step === p0.step) return p0.value;
+
+    const t = (x - p0.step) / (p1.step - p0.step);
+    return p0.value + t * (p1.value - p0.value);
+  };
+
+  let currentPoints = points;
+  let curvePoints: { step: number; value: number }[] = [];
+
+  // Iterations for outlier removal
+  const iterations = 3;
+  for (let iter = 0; iter < iterations; iter++) {
+    curvePoints = buildCurve(currentPoints);
+    if (curvePoints.length < 2) break;
+
+    const binWidth = range / bins;
+    const binDevs: number[][] = Array.from({ length: bins }, () => []);
+    const pointDevs: { idx: number; val: number; binIdx: number }[] = [];
+
+    // Calculate deviations
+    for (let i = 0; i < currentPoints.length; i++) {
+      const p = currentPoints[i];
+      const baseline = evalCurve(curvePoints, p.step);
+      // Avoid log(0) or negative
+      const v = p.value > 1e-9 ? p.value : 1e-9;
+      const b = baseline > 1e-9 ? baseline : 1e-9;
+      const dev = Math.log(v / b);
+
+      const binIdx = Math.min(bins - 1, Math.floor((p.step - minStep) / binWidth));
+      binDevs[binIdx].push(dev);
+      pointDevs.push({ idx: i, val: dev, binIdx });
+    }
+
+    const binStats = binDevs.map(devs => {
+      if (devs.length < 2) return null;
+      const med = median(devs);
+      const mad = getMad(devs, med);
+      return { med, mad };
+    });
+
+    const nextPoints: { step: number; value: number }[] = [];
+    const threshold = 3.5;
+    const k = 1.4826;
+
+    for (let i = 0; i < currentPoints.length; i++) {
+      const { val: dev, binIdx } = pointDevs[i];
+      const stats = binStats[binIdx];
+
+      if (!stats || stats.mad === 0) {
+        nextPoints.push(currentPoints[i]);
+        continue;
+      }
+
+      const z = (dev - stats.med) / (k * stats.mad);
+      if (Math.abs(z) <= threshold) {
+        nextPoints.push(currentPoints[i]);
+      }
+    }
+
+    if (nextPoints.length === currentPoints.length) break;
+    currentPoints = nextPoints;
+  }
+
+  // Final curve
+  curvePoints = buildCurve(currentPoints);
+
+  // Return smooth values for ORIGINAL points
+  return points.map(p => ({
+    step: p.step,
+    value: evalCurve(curvePoints, p.step),
+  }));
+}
+
 // EMA smoothing that works on a per-series list.
 // alpha=1 -> no smoothing, alpha closer to 0 -> more smoothing.
 function emaSmoothPoints(points: { step: number; value: number }[], alpha: number) {
@@ -193,10 +321,12 @@ export default function JobLossGraph({ job }: Props) {
   const [useLogScale, setUseLogScale] = useState(false);
   const [showRaw, setShowRaw] = useState(false);
   const [showSmoothed, setShowSmoothed] = useState(true);
+  const [showInterpolated, setShowInterpolated] = useState(false);
   const [showGlobal, setShowGlobal] = useState(true);
 
   // 0..100 slider. 100 = no smoothing, 0 = heavy smoothing.
   const [smoothing, setSmoothing] = useState(90);
+  const [interpolateBins, setInterpolateBins] = useState(50);
 
   // UI-only downsample for rendering speed
   const [plotStride, setPlotStride] = useState(1);
@@ -297,12 +427,16 @@ export default function JobLossGraph({ job }: Props) {
 
     const out: Record<
       string,
-      { raw: { step: number; value: number; image_path?: string | null }[]; smooth: { step: number; value: number }[] }
+      {
+        raw: { step: number; value: number; image_path?: string | null }[];
+        smooth: { step: number; value: number }[];
+        interp: { step: number; value: number }[];
+      }
     > = {};
 
     const processPoints = (rawPts: { step: number; value: number; image_path?: string | null }[], outKey: string) => {
       let r = rawPts;
-      
+
       // Windowing by range
       const [startStep, endStep] = windowRange;
       if (startStep > 1 || endStep < trainSteps) {
@@ -310,7 +444,8 @@ export default function JobLossGraph({ job }: Props) {
       }
 
       const smooth = emaSmoothPoints(r, alpha);
-      out[outKey] = { raw: r, smooth };
+      const interp = showInterpolated ? interpolateSmoothPoints(r, interpolateBins) : [];
+      out[outKey] = { raw: r, smooth, interp };
     };
 
     const keysToProcess = [...activeKeys];
@@ -355,7 +490,8 @@ export default function JobLossGraph({ job }: Props) {
         raw.sort((a, b) => a.step - b.step);
 
         const smooth = emaSmoothPoints(raw, alpha);
-        out[key] = { raw, smooth };
+        const interp = showInterpolated ? interpolateSmoothPoints(raw, interpolateBins) : [];
+        out[key] = { raw, smooth, interp };
         continue;
       }
 
@@ -388,7 +524,21 @@ export default function JobLossGraph({ job }: Props) {
     }
 
     return out;
-  }, [series, activeKeys, smoothing, plotStride, windowRange, useLogScale, enabledDatasets, trainSteps, isTimestepMode, timestepKey, selectableKeys]);
+  }, [
+    series,
+    activeKeys,
+    smoothing,
+    interpolateBins,
+    showInterpolated,
+    plotStride,
+    windowRange,
+    useLogScale,
+    enabledDatasets,
+    trainSteps,
+    isTimestepMode,
+    timestepKey,
+    selectableKeys,
+  ]);
 
   const chartData = useMemo(() => {
     // Merge series into one array of objects keyed by step.
@@ -408,6 +558,11 @@ export default function JobLossGraph({ job }: Props) {
       for (const p of s.smooth) {
         const row = map.get(p.step) ?? { step: p.step };
         row[`${fullKey}__smooth`] = p.value;
+        map.set(p.step, row);
+      }
+      for (const p of s.interp) {
+        const row = map.get(p.step) ?? { step: p.step };
+        row[`${fullKey}__interp`] = p.value;
         map.set(p.step, row);
       }
     }
@@ -431,9 +586,18 @@ export default function JobLossGraph({ job }: Props) {
         // Exclude timestep values from Y domain if not in Timestep Mode
         if (!isTimestepMode && timestepKey && key.includes(timestepKey)) continue;
 
-        const k = showSmoothed ? `${key}__smooth` : `${key}__raw`;
-        const v = row[k];
-        if (typeof v === 'number' && Number.isFinite(v)) vals.push(v);
+        if (showSmoothed) {
+          const v = row[`${key}__smooth`];
+          if (typeof v === 'number' && Number.isFinite(v)) vals.push(v);
+        }
+        if (showInterpolated) {
+          const v = row[`${key}__interp`];
+          if (typeof v === 'number' && Number.isFinite(v)) vals.push(v);
+        }
+        if (!showSmoothed && !showInterpolated) {
+          const v = row[`${key}__raw`];
+          if (typeof v === 'number' && Number.isFinite(v)) vals.push(v);
+        }
       }
     }
     if (vals.length < 10) return ['auto', 'auto'];
@@ -444,7 +608,7 @@ export default function JobLossGraph({ job }: Props) {
 
     if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo === hi) return ['auto', 'auto'];
     return [lo, hi];
-  }, [clipOutliers, chartData, perSeries, showSmoothed, isTimestepMode, timestepKey]);
+  }, [clipOutliers, chartData, perSeries, showSmoothed, showInterpolated, isTimestepMode, timestepKey]);
 
   const latestSummary = useMemo(() => {
     // Provide a simple “latest” readout for the first active series
@@ -456,12 +620,14 @@ export default function JobLossGraph({ job }: Props) {
 
     const lastRaw = s.raw.length ? s.raw[s.raw.length - 1] : null;
     const lastSmooth = s.smooth.length ? s.smooth[s.smooth.length - 1] : null;
+    const lastInterp = s.interp.length ? s.interp[s.interp.length - 1] : null;
 
     return {
       key: firstKey,
-      step: lastRaw?.step ?? lastSmooth?.step ?? null,
+      step: lastRaw?.step ?? lastSmooth?.step ?? lastInterp?.step ?? null,
       raw: lastRaw?.value ?? null,
       smooth: lastSmooth?.value ?? null,
+      interp: lastInterp?.value ?? null,
     };
   }, [activeKeys, perSeries]);
 
@@ -547,7 +713,11 @@ export default function JobLossGraph({ job }: Props) {
                       const imagePath = data.image_path;
                       const tsKeyRaw = Object.keys(data).find(k => /timestep.*__raw/i.test(k));
                       const tsKeySmooth = Object.keys(data).find(k => /timestep.*__smooth/i.test(k));
-                      const timestep = (tsKeyRaw ? data[tsKeyRaw] : null) ?? (tsKeySmooth ? data[tsKeySmooth] : null);
+                      const tsKeyInterp = Object.keys(data).find(k => /timestep.*__interp/i.test(k));
+                      const timestep =
+                        (tsKeyRaw ? data[tsKeyRaw] : null) ??
+                        (tsKeySmooth ? data[tsKeySmooth] : null) ??
+                        (tsKeyInterp ? data[tsKeyInterp] : null);
                       return (
                         <div
                           style={{
@@ -636,6 +806,19 @@ export default function JobLossGraph({ job }: Props) {
                           connectNulls
                         />
                       )}
+                      {showInterpolated && (
+                        <Line
+                          type="monotone"
+                          dataKey={`${k}__interp`}
+                          name={`${k} (interp)`}
+                          stroke={color}
+                          strokeWidth={2}
+                          strokeDasharray="4 4"
+                          dot={false}
+                          isAnimationActive={false}
+                          connectNulls
+                        />
+                      )}
                     </g>
                   );
                 })}
@@ -674,6 +857,19 @@ export default function JobLossGraph({ job }: Props) {
                             connectNulls
                           />
                         )}
+                        {showInterpolated && (
+                          <Line
+                            type="monotone"
+                            dataKey={`${fullKey}__interp`}
+                            name={`${name} (interp)`}
+                            stroke={color}
+                            strokeWidth={2}
+                            strokeDasharray="4 4"
+                            dot={false}
+                            isAnimationActive={false}
+                            connectNulls
+                          />
+                        )}
                       </g>
                     );
                   });
@@ -691,7 +887,16 @@ export default function JobLossGraph({ job }: Props) {
             <label className="block text-xs text-gray-400 mb-2">Display</label>
             <div className="flex flex-wrap gap-2">
               <ToggleButton checked={showGlobal} onClick={() => setShowGlobal(v => !v)} label="Global" />
-              <ToggleButton checked={showSmoothed} onClick={() => setShowSmoothed(v => !v)} label="Smoothed" />
+              <ToggleButton
+                checked={showSmoothed}
+                onClick={() => setShowSmoothed(v => !v)}
+                label="Smoothed (Linear)"
+              />
+              <ToggleButton
+                checked={showInterpolated}
+                onClick={() => setShowInterpolated(v => !v)}
+                label="Smooth (Interpolate)"
+              />
               <ToggleButton checked={showRaw} onClick={() => setShowRaw(v => !v)} label="Raw" />
               <ToggleButton checked={useLogScale} onClick={() => setUseLogScale(v => !v)} label="Log Y" />
               <ToggleButton checked={clipOutliers} onClick={() => setClipOutliers(v => !v)} label="Clip outliers" />
@@ -778,6 +983,22 @@ export default function JobLossGraph({ job }: Props) {
               onChange={e => setSmoothing(Number(e.target.value))}
               className="w-full accent-blue-500"
               disabled={!showSmoothed}
+            />
+          </div>
+
+          <div className="bg-gray-950 border border-gray-800 rounded-lg p-3">
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-xs text-gray-400">Interpolate Bins</label>
+              <span className="text-xs text-gray-300">{interpolateBins}</span>
+            </div>
+            <input
+              type="range"
+              min={1}
+              max={trainSteps}
+              value={interpolateBins}
+              onChange={e => setInterpolateBins(Number(e.target.value))}
+              className="w-full accent-blue-500"
+              disabled={!showInterpolated}
             />
           </div>
 
