@@ -207,6 +207,9 @@ const PALETTE = [
 ];
 
 function strokeForKey(key: string) {
+  if (key === 'loss/loss (timestep corrected)') {
+    return 'rgba(52,211,153,1)'; // emerald-400
+  }
   return PALETTE[hashToIndex(key, PALETTE.length)];
 }
 
@@ -465,7 +468,7 @@ export default function JobLossGraph({ job }: Props) {
           .map(m => ({ step: m.ts, value: m.loss }))
           .sort((a, b) => a.step - b.step);
 
-        const smoothedTsCurve = interpolateSmoothPoints(pointsByTs, 50, removeOutliers);
+        const smoothedTsCurve = interpolateSmoothPoints(pointsByTs, 1000, removeOutliers);
         // smoothedTsCurve has the same length as pointsByTs and corresponds 1:1
         const tsToExpected = new Map<number, number>();
         smoothedTsCurve.forEach(p => {
@@ -881,7 +884,6 @@ export default function JobLossGraph({ job }: Props) {
                           name={`${k} (interp)`}
                           stroke={color}
                           strokeWidth={2}
-                          strokeDasharray="4 4"
                           dot={false}
                           isAnimationActive={false}
                           connectNulls
