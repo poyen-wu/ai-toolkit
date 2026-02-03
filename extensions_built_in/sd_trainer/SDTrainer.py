@@ -667,6 +667,7 @@ class SDTrainer(BaseSDTrainProcess):
             else:
                 raise ValueError(f"Unknown diffusion feature extractor version {self.dfe.version}")
         
+        original_target = target
         if self.train_config.do_guidance_loss:
             with torch.no_grad():
                 # we make cached blank prompt embeds that match the batch size
@@ -708,6 +709,8 @@ class SDTrainer(BaseSDTrainProcess):
                 
                 unconditional_target = unconditional_target * alpha
                 target = unconditional_target + guidance_scale * (target - unconditional_target)
+            
+            original_target = target
 
             if self.train_config.do_differential_guidance:
                 with torch.no_grad():
@@ -735,6 +738,7 @@ class SDTrainer(BaseSDTrainProcess):
             pred, target = self.process_output_for_turbo(pred, noisy_latents, timesteps, noise, batch)
 
         ignore_snr = False
+        loss_unscaled = None
 
         if loss_target == 'source' or loss_target == 'unaugmented':
             assert not self.train_config.train_turbo
@@ -767,19 +771,24 @@ class SDTrainer(BaseSDTrainProcess):
             # mse loss without reduction
             loss_per_element = (weighing.float() * (denoised_latents.float() - target.float()) ** 2)
             loss = loss_per_element
+            loss_unscaled = loss
         else:
 
             if self.train_config.loss_type == "mae":
                 loss = torch.nn.functional.l1_loss(pred.float(), target.float(), reduction="none")
+                loss_unscaled = torch.nn.functional.l1_loss(pred.float(), original_target.float(), reduction="none")
             elif self.train_config.loss_type == "wavelet":
                 loss = wavelet_loss(pred, batch.latents, noise)
+                loss_unscaled = loss
             elif self.train_config.loss_type == "stepped":
                 loss = stepped_loss(pred, batch.latents, noise, noisy_latents, timesteps, self.sd.noise_scheduler)
                 # the way this loss works, it is low, increase it to match predictable LR effects
                 loss = loss * 10.0
+                loss_unscaled = loss
             else:
                 loss = torch.nn.functional.mse_loss(pred.float(), target.float(), reduction="none")
-                
+                loss_unscaled = torch.nn.functional.mse_loss(pred.float(), original_target.float(), reduction="none")
+
             do_weighted_timesteps = False
             if self.sd.is_flow_matching:
                 if self.train_config.linear_timesteps or self.train_config.linear_timesteps2:
@@ -801,9 +810,11 @@ class SDTrainer(BaseSDTrainProcess):
                 elif len(loss.shape) == 5:
                     timestep_weight = timestep_weight.view(-1, 1, 1, 1, 1).detach()
                 loss = loss * timestep_weight
+                loss_unscaled = loss_unscaled * timestep_weight
 
         if self.train_config.do_prior_divergence and prior_pred is not None:
             loss = loss + (torch.nn.functional.mse_loss(pred.float(), prior_pred.float(), reduction="none") * -1.0)
+            loss_unscaled = loss_unscaled + (torch.nn.functional.mse_loss(pred.float(), prior_pred.float(), reduction="none") * -1.0)
 
         if self.train_config.train_turbo:
             mask_multiplier = mask_multiplier[:, 3:, :, :]
@@ -817,6 +828,7 @@ class SDTrainer(BaseSDTrainProcess):
                 mask_multiplier = mask_multiplier.unsqueeze(2)  # add time dimension back for video
                 mask_multiplier = mask_multiplier.repeat(1, 1, noise_pred.shape[2], 1, 1)
             loss = loss * mask_multiplier
+            loss_unscaled = loss_unscaled * mask_multiplier
         except Exception as e:
             # todo handle mask with video models
             print("Could not apply mask multiplier to loss")
@@ -846,41 +858,52 @@ class SDTrainer(BaseSDTrainProcess):
             # loss = loss + prior_loss
         if len(noise_pred.shape) == 5:
             loss = loss.mean([1, 2, 3, 4])
+            loss_unscaled = loss_unscaled.mean([1, 2, 3, 4])
         else:
             loss = loss.mean([1, 2, 3])
+            loss_unscaled = loss_unscaled.mean([1, 2, 3])
         # apply loss multiplier before prior loss
         # multiply by our mask
         try:
             loss = loss * loss_multiplier
+            loss_unscaled = loss_unscaled * loss_multiplier
         except:
             # todo handle mask with video models
             pass
         if prior_loss is not None:
             loss = loss + prior_loss
+            loss_unscaled = loss_unscaled + prior_loss
 
         if not self.train_config.train_turbo:
             if self.train_config.learnable_snr_gos:
                 # add snr_gamma
                 loss = apply_learnable_snr_gos(loss, timesteps, self.snr_gos)
+                loss_unscaled = apply_learnable_snr_gos(loss_unscaled, timesteps, self.snr_gos)
             elif self.train_config.snr_gamma is not None and self.train_config.snr_gamma > 0.000001 and not ignore_snr:
                 # add snr_gamma
                 loss = apply_snr_weight(loss, timesteps, self.sd.noise_scheduler, self.train_config.snr_gamma,
                                         fixed=True)
+                loss_unscaled = apply_snr_weight(loss_unscaled, timesteps, self.sd.noise_scheduler, self.train_config.snr_gamma,
+                                        fixed=True)
             elif self.train_config.min_snr_gamma is not None and self.train_config.min_snr_gamma > 0.000001 and not ignore_snr:
                 # add min_snr_gamma
                 loss = apply_snr_weight(loss, timesteps, self.sd.noise_scheduler, self.train_config.min_snr_gamma)
+                loss_unscaled = apply_snr_weight(loss_unscaled, timesteps, self.sd.noise_scheduler, self.train_config.min_snr_gamma)
 
         loss = loss.mean()
+        loss_unscaled = loss_unscaled.mean()
         
         # check for audio loss
         if batch.audio_pred is not None and batch.audio_target is not None:
             audio_loss = torch.nn.functional.mse_loss(batch.audio_pred.float(), batch.audio_target.float(), reduction="mean")
             loss = loss + audio_loss
+            loss_unscaled = loss_unscaled + audio_loss
 
         # check for additional losses
         if self.adapter is not None and hasattr(self.adapter, "additional_loss") and self.adapter.additional_loss is not None:
 
             loss = loss + self.adapter.additional_loss.mean()
+            loss_unscaled = loss_unscaled + self.adapter.additional_loss.mean()
             self.adapter.additional_loss = None
 
         if self.train_config.target_norm_std:
@@ -888,9 +911,10 @@ class SDTrainer(BaseSDTrainProcess):
             pred_std = noise_pred.std([2, 3], keepdim=True)
             norm_std_loss = torch.abs(self.train_config.target_norm_std_value - pred_std).mean()
             loss = loss + norm_std_loss
+            loss_unscaled = loss_unscaled + norm_std_loss
 
 
-        return loss + additional_loss
+        return loss + additional_loss, loss_unscaled + additional_loss
 
     def preprocess_batch(self, batch: 'DataLoaderBatchDTO'):
         return batch
@@ -1986,7 +2010,7 @@ class SDTrainer(BaseSDTrainProcess):
                         if doing_preservation and not do_inverted_masked_prior:
                             prior_to_calculate_loss = None
                         
-                        loss = self.calculate_loss(
+                        loss, loss_unscaled = self.calculate_loss(
                             noise_pred=noise_pred,
                             noise=noise,
                             noisy_latents=noisy_latents,
@@ -2003,6 +2027,7 @@ class SDTrainer(BaseSDTrainProcess):
 
                     # apply loss multiplier
                     loss = loss * loss_multiplier.mean()
+                    loss_unscaled = loss_unscaled * loss_multiplier.mean()
 
                     if self.train_config.diff_output_preservation or self.train_config.blank_prompt_preservation:
                         # send the loss backwards otherwise checkpointing will fail
@@ -2044,7 +2069,7 @@ class SDTrainer(BaseSDTrainProcess):
                             # else:
                             self.accelerator.backward(loss)
 
-        return loss.detach(), avg_timestep
+        return loss.detach(), avg_timestep, loss_unscaled.detach()
         # flush()
 
     def hook_train_loop(self, batch: Union[DataLoaderBatchDTO, List[DataLoaderBatchDTO]]):
@@ -2053,6 +2078,7 @@ class SDTrainer(BaseSDTrainProcess):
         else:
             batch_list = [batch]
         total_loss = None
+        total_loss_unscaled = None
         total_timestep = 0.0
         self.optimizer.zero_grad()
         for batch in batch_list:
@@ -2068,13 +2094,15 @@ class SDTrainer(BaseSDTrainProcess):
                         if self.current_boundary_index in self.sd.trainable_multistage_boundaries:
                             # if this boundary is trainable, we can stop looking
                             break
-            loss, avg_timestep = self.train_single_accumulation(batch)
+            loss, avg_timestep, loss_unscaled = self.train_single_accumulation(batch)
             self.steps_this_boundary += 1
             if total_loss is None:
                 total_loss = loss
+                total_loss_unscaled = loss_unscaled
                 total_timestep = avg_timestep
             else:
                 total_loss += loss
+                total_loss_unscaled += loss_unscaled
                 total_timestep += avg_timestep
 
             if len(batch_list) > 1 and self.model_config.low_vram:
@@ -2119,6 +2147,8 @@ class SDTrainer(BaseSDTrainProcess):
         loss_dict = OrderedDict(
             {'loss': (total_loss / len(batch_list)).item(), 'timestep': total_timestep / len(batch_list)}
         )
+        if total_loss_unscaled is not None:
+            loss_dict['unscaled'] = (total_loss_unscaled / len(batch_list)).item()
 
         self.end_of_training_loop()
 
