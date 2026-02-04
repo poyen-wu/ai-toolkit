@@ -210,6 +210,9 @@ function strokeForKey(key: string) {
   if (key === 'loss/loss (timestep corrected)') {
     return 'rgba(52,211,153,1)'; // emerald-400
   }
+  if (key === 'loss/unscaled (timestep corrected)') {
+    return 'rgba(251,191,36,1)'; // amber-400
+  }
   return PALETTE[hashToIndex(key, PALETTE.length)];
 }
 
@@ -386,12 +389,16 @@ export default function JobLossGraph({ job }: Props) {
   }, [dataTimestepRange]);
 
   const correctedKey = 'loss/loss (timestep corrected)';
+  const correctedUnscaledKey = 'loss/unscaled (timestep corrected)';
 
   const selectableKeys = useMemo(() => {
     const k = [...lossKeys];
     if (timestepKey && !k.includes(timestepKey)) k.push(timestepKey);
     if (series['loss/loss'] && timestepKey) {
       k.push(correctedKey);
+    }
+    if (series['loss/unscaled'] && timestepKey) {
+      k.push(correctedUnscaledKey);
     }
     return k.sort();
   }, [lossKeys, timestepKey, series]);
@@ -402,7 +409,7 @@ export default function JobLossGraph({ job }: Props) {
       const next = { ...prev };
       for (const k of selectableKeys) {
         if (next[k] === undefined) {
-          if (k === correctedKey) {
+          if (k === correctedKey || k === correctedUnscaledKey) {
             next[k] = false;
           } else {
             next[k] = true;
@@ -515,6 +522,54 @@ export default function JobLossGraph({ job }: Props) {
           };
         });
         augmentedSeries[correctedKey] = correctedPts;
+      }
+    }
+
+    if (series['loss/unscaled'] && timestepKey) {
+      const lossPts = series['loss/unscaled'];
+      const tsPts = series[timestepKey]!;
+
+      const stepToTs = new Map<number, number>();
+      tsPts.forEach(p => {
+        if (p.value !== null && Number.isFinite(p.value)) stepToTs.set(p.step, p.value!);
+      });
+
+      const matched: { step: number; loss: number; ts: number }[] = [];
+      let totalLoss = 0;
+      lossPts.forEach(p => {
+        const ts = stepToTs.get(p.step);
+        if (ts !== undefined && p.value !== null && Number.isFinite(p.value)) {
+          matched.push({ step: p.step, loss: p.value!, ts });
+          totalLoss += p.value!;
+        }
+      });
+
+      if (matched.length > 5) {
+        const avgLoss = totalLoss / matched.length;
+
+        // Use the robust interpolateSmoothPoints algorithm
+        // We need to pass it points where "step" is actually "timestep"
+        const pointsByTs = matched
+          .map(m => ({ step: m.ts, value: m.loss }))
+          .sort((a, b) => a.step - b.step);
+
+        const smoothedTsCurve = interpolateSmoothPoints(pointsByTs, correctedBins, removeOutliers);
+        // smoothedTsCurve has the same length as pointsByTs and corresponds 1:1
+        const tsToExpected = new Map<number, number>();
+        smoothedTsCurve.forEach(p => {
+          tsToExpected.set(p.step, p.value);
+        });
+
+        const correctedPts: LossPoint[] = matched.map(m => {
+          const expected = tsToExpected.get(m.ts) || avgLoss;
+          const factor = expected > 1e-9 ? avgLoss / expected : 1;
+          return {
+            step: m.step,
+            value: m.loss * factor,
+            image_path: null,
+          };
+        });
+        augmentedSeries[correctedUnscaledKey] = correctedPts;
       }
     }
 
@@ -1148,7 +1203,7 @@ export default function JobLossGraph({ job }: Props) {
                 <button
                   type="button"
                   onClick={() => setRemoveOutliers(v => !v)}
-                  disabled={!enabled[correctedKey]}
+                  disabled={!enabled[correctedKey] && !enabled[correctedUnscaledKey]}
                   className={[
                     'px-1.5 py-0.5 rounded text-[10px] border transition-colors',
                     removeOutliers
@@ -1168,7 +1223,7 @@ export default function JobLossGraph({ job }: Props) {
               value={correctedBins}
               onChange={e => setCorrectedBins(Number(e.target.value))}
               className="w-full accent-blue-500"
-              disabled={!enabled[correctedKey]}
+              disabled={!enabled[correctedKey] && !enabled[correctedUnscaledKey]}
             />
           </div>
 
