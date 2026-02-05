@@ -161,6 +161,7 @@ class ProdigyPlusScheduleFree(CoreOptimiser):
             incompatible with factorisation and Adam-atan2.
             (default: False)
     """
+
     def __init__(self, params, lr=1.0,
                  betas=(0.9, 0.99), beta3=None,
                  weight_decay=0.0,
@@ -211,6 +212,39 @@ class ProdigyPlusScheduleFree(CoreOptimiser):
                         use_orthograd=use_orthograd,
                         use_focus=use_focus)
 
+        # Lock the LR used internally by this optimizer ---
+        # We DO NOT overwrite group['lr'] during training, so schedulers/other code can keep using it.
+        for group in self.param_groups:
+            group.setdefault("ignore_scheduler_lr", True)  # master switch
+            group.setdefault("fixed_lr", float(group["lr"]))  # internal LR this optimizer will use
+            group.setdefault("scheduled_lr", float(group["lr"]))  # last seen external/scheduled LR
+            group.setdefault("initial_lr", float(group["lr"]))    # helps some schedulers/state_dicts
+
+    # Internal LR accessor (scheduler-proof) ---
+    def _optim_lr(self, group):
+        return group["fixed_lr"] if group.get("ignore_scheduler_lr", True) else group["lr"]
+
+    # Override get_dlr so ALL optimizer math ignores scheduler LR changes ---
+    def get_dlr(self, group):
+        shared_d = group.get('shared_d', None)
+        base_lr = self._optim_lr(group)
+        d_val = (shared_d if group['split_groups'] and group['split_groups_mean'] and shared_d is not None else group['d'])
+        return d_val * base_lr
+
+    # Keep effective_lr consistent with fixed_lr ---
+    @torch.no_grad()
+    def on_end_step(self):
+        super().on_end_step()
+
+        # Track what the scheduler/outer code currently has in group['lr']
+        for group in self.param_groups:
+            group["scheduled_lr"] = float(group.get("lr", group["scheduled_lr"]))
+
+            # CoreOptimiser sets effective_lr = group['lr'] for non-schedulefree groups.
+            # Make effective_lr reflect the LR actually used internally.
+            if not group.get("use_schedulefree", True):
+                group["effective_lr"] = self._optim_lr(group)
+
     @torch.no_grad()
     def set_train_mode(self, train):
         for group in (g for g in self.param_groups if g['use_schedulefree'] and g['train_mode'] != train):
@@ -249,20 +283,18 @@ class ProdigyPlusScheduleFree(CoreOptimiser):
         weight_sum = group['running_weight_sum'] = group.get('weight_sum', 0) + weight
         ckp1 = weight / weight_sum if weight_sum else 0
 
-        # "Through the River: Understanding the Benefit of Schedule-Free Methods": https://arxiv.org/pdf/2507.09846
-        # Original SF averaging strength follows the calculation 1.0 / (1 - beta1). For beta1 = 0.9, this works out
-        # to schedulefree_c = 10, 0.95 = 20, and so on.
         schedulefree_c = group.get('schedulefree_c', 0)
         if schedulefree_c > 0:
             ckp1 = min(1.0, ckp1 * (1 - beta1) * schedulefree_c)
 
         xy_step = 1 - beta1 * (1 - ckp1)
-        group['effective_lr'] = group['lr'] * xy_step
+
+        group['effective_lr'] = self._optim_lr(group) * xy_step
 
         cautious, grams = group['use_cautious'], group['use_grams']
 
         y_wd = None
-        if decay != 0: # Weight decay at Y.
+        if decay != 0:  # Weight decay at Y.
             if group['weight_decay_by_lr']:
                 update.add_(y, alpha=decay)
             else:
@@ -273,13 +305,10 @@ class ProdigyPlusScheduleFree(CoreOptimiser):
             z.sub_(update, alpha=dlr)
 
             if cautious:
-                # "Cautious Optimizer (C-Optim): Improving Training with One Line of Code": https://github.com/kyleliang919/c-optim
-                # ScheduleFree implementation by nhamanasu: https://github.com/facebookresearch/schedule_free/pull/54
                 mask = update.mul_(u).sign_().clamp_min_(0)
                 mask.div_(mask.mean().clamp_min(1e-3))
                 u.mul_(mask)
             elif grams:
-                # "Grams: Gradient Descent with Adaptive Momentum Scaling": https://arxiv.org/abs/2412.17107
                 u.abs_().mul_(update.sign_())
 
             y.sub_(u)
@@ -289,7 +318,7 @@ class ProdigyPlusScheduleFree(CoreOptimiser):
             z.sub_(update, alpha=dlr)
             y.sub_(update, alpha=dlr * xy_step)
 
-        if y_wd is not None: # Apply decoupled LR decay.
+        if y_wd is not None:  # Apply decoupled LR decay.
             z.sub_(y_wd, alpha=decay)
             y.sub_(y_wd, alpha=decay * xy_step)
             del y_wd
