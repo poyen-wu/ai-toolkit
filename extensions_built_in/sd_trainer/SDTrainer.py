@@ -2132,8 +2132,23 @@ class SDTrainer(BaseSDTrainProcess):
             pass
 
         # TODO Should we only step scheduler on grad step? If so, need to recalculate last step
-        with self.timer('scheduler_step'):
-            self.lr_scheduler.step()
+        if not self.is_grad_accumulation_step:
+            # clip grads ...
+            with self.timer('optimizer_step'):
+                self.optimizer.step()
+                self.optimizer.zero_grad(set_to_none=True)
+                if self.adapter and isinstance(self.adapter, CustomAdapter):
+                    self.adapter.post_weight_update()
+
+            if self.ema is not None:
+                with self.timer('ema_update'):
+                    self.ema.update()
+
+            # step LR scheduler ONLY when weights were updated
+            with self.timer('scheduler_step'):
+                self.lr_scheduler.step()
+        else:
+            pass
 
         if self.embedding is not None:
             with self.timer('restore_embeddings'):
